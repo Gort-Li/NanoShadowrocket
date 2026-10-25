@@ -48,8 +48,8 @@ const TARGETS = [
   },
   {
     file: "src-tauri/Cargo.lock",
-    // 只改本包条目，依赖项的 version 不能动。
-    pattern: /(name = "nano-shadowrocket"\nversion = ")[^"]*(")/,
+    // 只改本包条目，依赖项的 version 不能动；兼容 CI 上 checkout 出的 CRLF。
+    pattern: /(name = "nano-shadowrocket"\r?\nversion = ")[^"]*(")/,
   },
 ];
 
