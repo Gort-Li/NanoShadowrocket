@@ -1,0 +1,67 @@
+[package]
+name = "nano-shadowrocket"
+version = "0.1.0"
+description = "NanoShadowrocket - 极轻量 Windows 代理客户端"
+authors = ["Gort"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+aho-corasick = "1.1"
+ipnet = "2.11"
+thiserror = "2"
+tokio = { version = "1", features = [
+    "net",
+    "io-util",
+    "time",
+    "sync",
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "fs",
+] }
+async-trait = "0.1"
+aes = "0.8"
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+md-5 = "0.10"
+sha2 = "0.10"
+crc32fast = "1"
+getrandom = "0.3"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+parking_lot = "0.12"
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "gzip",
+    "json",
+] }
+winreg = "0.55"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinInet",
+    "Win32_UI_WindowsAndMessaging",
+] }
+tauri = { version = "2.12.5", features = ["tray-icon"] }
+tauri-plugin-log = "2"
+tauri-plugin-single-instance = "2"
+
+# 关闭 LTO 并放开并行单元：安装包只比 thin LTO 大 0.2MB，
+# 但省掉每次打包近两分钟的链接时间，日常迭代优先。
+[profile.release]
+codegen-units = 16
+lto = false
+opt-level = "s"
+strip = true
