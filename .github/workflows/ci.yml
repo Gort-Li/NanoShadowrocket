@@ -29,6 +29,10 @@ jobs:
       - name: 安装前端依赖
         run: bun install --frozen-lockfile
 
+      # Tauri 的 build script 会检查 externalBin，缺少 sidecar 时 cargo clippy 直接失败。
+      - name: 准备 v2ray sidecar
+        run: bun run prepare:sidecar
+
       - name: 版本号一致性
         run: bun scripts/set-version.mjs --check
 
