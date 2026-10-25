@@ -1,0 +1,105 @@
+name: Release Watch
+
+# GitHub 不会为 draft Release 的 created / edited 触发任何 workflow
+# （官方文档原文：Workflows are not triggered for the created, edited, or deleted
+# activity types for draft releases）。所以在 GitHub 上「Draft a new release」
+# 保存成草稿后，光靠事件永远等不到构建 —— 只能轮询。
+#
+# 这个工作流每 15 分钟扫一遍仓库的 Release（含 draft）：
+#   tag 合法 + 14 天内创建 + 缺 latest.json / setup.exe + 没有退出标记
+#   → dispatch Release 工作流，把 tag 当版本号构建。
+#
+# 想立刻捡起刚建好的 draft，手动 Run workflow 这个工作流即可。
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # dispatch 别的 workflow 需要 actions: write
+  actions: write
+
+concurrency:
+  group: release-watch
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 扫描未构建的 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          gh api --paginate "repos/$REPO/releases?per_page=100" > releases.json
+          CUTOFF="$(date -u -d '14 days ago' +%s)"
+
+          # 待构建：tag 形如 vX.Y.Z、14 天内创建、没有 latest.json、没有退出标记
+          jq -r --argjson cutoff "$CUTOFF" '
+            .[]
+            | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"))
+            | select((.created_at | fromdateiso8601) > $cutoff)
+            | select((.assets | map(.name) | index("latest.json")) == null)
+            | select(((.body // "") | test("no-auto-build")) | not)
+            | .tag_name
+          ' releases.json > pending.txt
+
+          echo "候选 tag："
+          sed 's/^/  - /' pending.txt || true
+
+          # 每个 tag 的历史运行情况，用来防止失败后无限重试
+          gh run list --workflow=release.yml --limit 100 \
+            --json displayTitle,status,conclusion > runs.json
+
+          dispatched=0
+          skipped=0
+          {
+            echo "## Release Watch"
+            echo
+            echo "扫描时间：$(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo
+            echo "| tag | 结果 |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            title="Release $tag"
+
+            inflight="$(jq -r --arg t "$title" '
+              [.[] | select(.displayTitle == $t)
+                   | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending")]
+              | length' runs.json)"
+            failures="$(jq -r --arg t "$title" '
+              [.[] | select(.displayTitle == $t and .conclusion == "failure")] | length' runs.json)"
+
+            if [ "$inflight" -gt 0 ]; then
+              echo "跳过 $tag：已有排队或运行中的构建"
+              echo "| $tag | 跳过（构建中） |" >> "$GITHUB_STEP_SUMMARY"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            if [ "$failures" -ge 2 ]; then
+              echo "跳过 $tag：已失败 $failures 次，需要人工排查后再手动 dispatch"
+              echo "| $tag | 跳过（已失败 $failures 次，需人工介入） |" >> "$GITHUB_STEP_SUMMARY"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            # --ref main：用默认分支上的工作流定义，避免 tag 太老、里面还没有 release.yml
+            gh workflow run release.yml --ref main -f tag="$tag"
+            echo "已触发 $tag"
+            echo "| $tag | 已触发构建 |" >> "$GITHUB_STEP_SUMMARY"
+            dispatched=$((dispatched + 1))
+          done < pending.txt
+
+          echo "触发 $dispatched 个，跳过 $skipped 个"
+          if [ "$dispatched" -eq 0 ] && [ "$skipped" -eq 0 ]; then
+            echo "| — | 没有待构建的 Release |" >> "$GITHUB_STEP_SUMMARY"
+          fi

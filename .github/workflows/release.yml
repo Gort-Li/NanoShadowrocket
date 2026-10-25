@@ -1,44 +1,130 @@
 name: Release
 
-# 版本号的唯一来源是 tag：在 GitHub 上发布 Release（tag 形如 v0.2.0）即触发构建。
-# 想自动算下一个版本，用 Bump Version 工作流；它打 tag、建 Release 后会显式 dispatch 这里。
+# 版本号的唯一来源是 tag，一次跑完「构建 → 校验 → 写文档 → 发布」。
+#
+# 触发路径：
+#   1. 在 GitHub 上把 Release 点成 Publish（release: published）
+#   2. 手建的 draft 被 Release Watch 轮询到，dispatch 本工作流
+#   3. Bump Version 算出版本号后 dispatch 本工作流
+#   4. 手工 dispatch，填 tag
+#
+# 幂等：同一个 tag 重复触发时，资产已齐就直接跳过构建，只做校验与发布。
 on:
   release:
     types: [published]
-  # Bump Version 用 GITHUB_TOKEN 创建 Release 时，GitHub 不会触发 release 事件；
-  # 因此 bump 工作流会显式 dispatch 这个入口，并把 tag 传进来。
   workflow_dispatch:
     inputs:
       tag:
-        description: "要构建的 Release tag（vX.Y.Z）"
+        description: "要构建的 tag（vX.Y.Z），必须已经存在对应的 Release"
         required: true
         type: string
+      force:
+        description: "资产已存在也强制重建"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
-jobs:
-  build:
-    runs-on: windows-latest
-    env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
-      RELEASE_NAME: ${{ github.event.release.name || inputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+# 同一个 tag 串行：published 事件与 Release Watch 撞车时，后一个会排队等前一个跑完，
+# 然后发现资产已齐，只做校验和发布，不会重复编译。
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
 
-      - name: 查找 Release
-        id: release
+run-name: Release ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  # 先摸清现状：tag 合法性、Release 是否存在、资产是否已齐、要不要先转回 draft。
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      release_id: ${{ steps.resolve.outputs.release_id }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      release_body: ${{ steps.resolve.outputs.release_body }}
+      is_draft: ${{ steps.resolve.outputs.is_draft }}
+      is_prerelease: ${{ steps.resolve.outputs.is_prerelease }}
+      need_build: ${{ steps.resolve.outputs.need_build }}
+    steps:
+      - name: 解析 tag 与 Release
+        id: resolve
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ env.RELEASE_TAG }}
+          REPO: ${{ github.repository }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
-          id="$(gh release view "$TAG" --json databaseId --jq .databaseId)"
-          test -n "$id"
-          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+          TAG="${EVENT_TAG:-${INPUT_TAG:-}}"
+          if [ -z "$TAG" ]; then
+            echo "没拿到 tag：事件里没有 release.tag_name，dispatch 也没填 tag"
+            exit 1
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "tag 格式不合法：「$TAG」。要求 vX.Y.Z，可选 -beta.1 这类后缀"
+            exit 1
+          fi
+          echo "tag = $TAG"
+
+          if ! gh api "repos/$REPO/releases/tags/$TAG" > release.json 2>/dev/null; then
+            echo "找不到 tag 为 $TAG 的 Release。先在 GitHub 上建好 Release（draft 也行），再跑这个工作流。"
+            exit 1
+          fi
+
+          ID="$(jq -r .id release.json)"
+          NAME="$(jq -r '.name // ""' release.json)"
+          DRAFT="$(jq -r .draft release.json)"
+          PRE="$(jq -r .prerelease release.json)"
+          BODY="$(jq -r '.body // ""' release.json)"
+          test -n "$ID"
+          NAME="${NAME:-$TAG}"
+
+          ASSETS="$(jq -r '.assets[].name' release.json)"
+          if echo "$ASSETS" | grep -Fxq 'latest.json'; then HAS_UPDATER=1; else HAS_UPDATER=0; fi
+          if echo "$ASSETS" | grep -Eq '_x64-setup\.exe$'; then HAS_EXE=1; else HAS_EXE=0; fi
+
+          NEED_BUILD=true
+          if [ "$HAS_UPDATER" = "1" ] && [ "$HAS_EXE" = "1" ] && [ "$FORCE" != "true" ]; then
+            NEED_BUILD=false
+            echo "资产已齐（latest.json + setup.exe），跳过构建"
+          fi
+
+          # 已经公开但还没构建完：先转回 draft，别让 releases/latest 指向半成品。
+          # 构建成功后在 finalize 里再发布，失败就停在 draft，客户端不受影响。
+          if [ "$NEED_BUILD" = "true" ] && [ "$DRAFT" = "false" ]; then
+            if gh release edit "$TAG" --draft=true; then
+              DRAFT=true
+              echo "::notice title=已转回 draft::$TAG 原本是发布状态但缺少资产，已临时转为 draft，构建完成后自动发布"
+            else
+              echo "::warning title=转 draft 失败::$TAG 保持发布状态继续构建，构建完成前客户端可能读不到 latest.json"
+            fi
+          fi
+
+          {
+            echo "tag=$TAG"
+            echo "release_id=$ID"
+            echo "release_name=$NAME"
+            echo "is_draft=$DRAFT"
+            echo "is_prerelease=$PRE"
+            echo "need_build=$NEED_BUILD"
+            echo "release_body<<__NANO_BODY_EOF__"
+            printf '%s\n' "$BODY"
+            echo "__NANO_BODY_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.need_build == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -57,7 +143,7 @@ jobs:
         run: bun run prepare:sidecar
 
       - name: 同步版本号
-        run: bun scripts/set-version.mjs ${{ env.RELEASE_TAG }}
+        run: bun scripts/set-version.mjs ${{ needs.plan.outputs.tag }}
 
       - name: 构建安装包与更新包
         uses: tauri-apps/tauri-action@v0
@@ -66,19 +152,33 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          releaseId: ${{ steps.release.outputs.id }}
-          tagName: ${{ env.RELEASE_TAG }}
-          releaseName: ${{ env.RELEASE_NAME }}
-          releaseBody: ${{ github.event.release.body }}
-          includeUpdaterJson: true
+          releaseId: ${{ needs.plan.outputs.release_id }}
+          tagName: ${{ needs.plan.outputs.tag }}
+          releaseName: ${{ needs.plan.outputs.release_name }}
+          releaseBody: ${{ needs.plan.outputs.release_body }}
+          # 显式跟随当前状态：tauri-action 的默认值 false 会把 draft 提前公开。
+          releaseDraft: ${{ needs.plan.outputs.is_draft }}
+          prerelease: ${{ needs.plan.outputs.is_prerelease }}
+          uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: --bundles nsis
 
+  # 构建成功（或因资产已齐而跳过）才收尾；构建失败时 release 停在 draft，等 Watch 重试。
+  finalize:
+    needs: [plan, build]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.plan.result == 'success'
+        && (needs.build.result == 'success' || needs.build.result == 'skipped')
+      }}
+    runs-on: ubuntu-latest
+    steps:
       - name: 校验更新清单
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ env.RELEASE_TAG }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
           gh release download "$TAG" --pattern latest.json --dir . --clobber
@@ -114,16 +214,44 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ env.RELEASE_TAG }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
-          NOTES=""
-          COMMIT="$(git rev-parse HEAD)"
-          if gh api -X POST "repos/${{ github.repository }}/releases/generate-notes" \
-               -f tag_name="$TAG" -f target_commitish="$COMMIT" --jq .body > notes.md 2>/dev/null; then
-            NOTES="$(cat notes.md)"
+          gh release view "$TAG" --json body --jq '.body // ""' > current.md
+
+          # 手写正文保护：优先取 nano:manual 标记区间；没有标记时，
+          # 判断旧正文是不是自动生成的（GitHub 的 generate-notes 或旧版本工作流），
+          # 是就丢弃重写，不是就当作用户手写内容原样保留。
+          if grep -qF '<!-- nano:manual:start -->' current.md; then
+            awk '/<!-- nano:manual:start -->/{f=1;next} /<!-- nano:manual:end -->/{f=0} f' \
+              current.md > manual.md
+          elif grep -qF '**Full Changelog**' current.md \
+            || grep -qF '## What'"'"'s Changed' current.md \
+            || { grep -qF '## 下载' current.md && grep -qF '## 校验' current.md; }; then
+            : > manual.md
+            echo "旧正文是自动生成的，丢弃后重新生成"
+          else
+            cp current.md manual.md
           fi
+
+          # 保证以换行结尾，否则结束标记会粘在最后一行文字后面
+          if [ -s manual.md ] && [ -n "$(tail -c 1 manual.md)" ]; then
+            printf '\n' >> manual.md
+          fi
+
+          COMMIT="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)"
+          NOTES=""
+          if gh api -X POST "repos/$REPO/releases/generate-notes" \
+               -f tag_name="$TAG" -f target_commitish="$COMMIT" --jq .body > generated.md 2>/dev/null; then
+            NOTES="$(cat generated.md)"
+          fi
+
           {
+            echo '<!-- nano:manual:start -->'
+            cat manual.md
+            echo '<!-- nano:manual:end -->'
+            echo
             echo "## 下载"
             echo
             echo "- Windows 安装包：\`NanoShadowrocket_${TAG#v}_x64-setup.exe\`"
@@ -148,12 +276,19 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ env.RELEASE_TAG }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
-          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
-            gh release edit "$TAG" --draft=false --latest
-            echo "已发布 $TAG"
-          else
+          DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [ "$DRAFT" != "true" ]; then
             echo "$TAG 已经是发布状态，跳过"
+            exit 0
           fi
+          PRE="$(gh release view "$TAG" --json isPrerelease --jq .isPrerelease)"
+          if [ "$PRE" = "true" ]; then
+            # 预发布不占用 releases/latest，客户端检查更新时看不到它。
+            gh release edit "$TAG" --draft=false --prerelease
+          else
+            gh release edit "$TAG" --draft=false --latest
+          fi
+          echo "已发布 $TAG"
