@@ -29,6 +29,12 @@ export default function NodeCard({
 }) {
   const tone = latencyTone(node.latencyMs);
   const unsupported = node.transport !== "tcp";
+  const securityLabel =
+    node.security === "chacha20-poly1305"
+      ? "chacha20"
+      : node.security === "legacy"
+        ? "legacy"
+        : "aes-128-gcm";
 
   return (
     <div
@@ -78,8 +84,13 @@ export default function NodeCard({
 
       <div className="hidden shrink-0 items-center gap-1.5 sm:flex">
         <span className="rounded-md border border-hairline bg-white/[0.03] px-1.5 py-[2px] text-[10px] text-ink-faint">
-          {node.security === "chacha20-poly1305" ? "chacha20" : "aes-128-gcm"}
+          {securityLabel}
         </span>
+        {node.udp && (
+          <span className="rounded-md border border-hairline bg-white/[0.03] px-1.5 py-[2px] text-[10px] text-ink-faint">
+            UDP
+          </span>
+        )}
         <span
           className={cn(
             "rounded-md border px-1.5 py-[2px] text-[10px]",

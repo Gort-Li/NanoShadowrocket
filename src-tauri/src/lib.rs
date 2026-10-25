@@ -6,6 +6,7 @@ pub mod error;
 pub mod events;
 pub mod proxy;
 pub mod rules;
+pub mod sidecar;
 pub mod state;
 pub mod sysproxy;
 pub mod vmess;
@@ -27,6 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -226,7 +228,7 @@ fn spawn_traffic(app: AppHandle, state: Arc<AppState>) {
             let payload = TrafficPayload {
                 stats: state.stats.snapshot(),
                 running: state.status().await.running,
-                recent: state.log.snapshot(),
+                active: state.active.snapshot(),
             };
             events::traffic(&app, &payload);
         }

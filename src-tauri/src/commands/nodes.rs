@@ -24,13 +24,19 @@ pub struct NodeInput {
     pub security: CipherMethod,
     #[serde(default)]
     pub transport: Transport,
+    #[serde(default = "default_udp")]
+    pub udp: bool,
+}
+
+fn default_udp() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddNodeResult {
     pub node: NodeEntry,
-    /// 导入时需要注意的限制（ws / tls / alterId）。
+    /// 导入时需要注意的限制（ws / tls 等尚未接入的传输）。
     pub warnings: Vec<String>,
 }
 
@@ -103,6 +109,7 @@ pub fn save_node(state: State<'_, Arc<AppState>>, input: NodeInput) -> Result<No
                 existing.config.alter_id = input.alter_id;
                 existing.config.security = input.security;
                 existing.transport = input.transport;
+                existing.udp = input.udp;
                 existing.latency_ms = None;
                 saved = Some(existing.clone());
                 return;
@@ -119,6 +126,7 @@ pub fn save_node(state: State<'_, Arc<AppState>>, input: NodeInput) -> Result<No
                 alter_id: input.alter_id,
                 security: input.security,
             },
+            udp: input.udp,
             latency_ms: None,
         };
         if cfg.nodes.is_empty() || cfg.selected_node.is_none() {

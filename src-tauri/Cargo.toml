@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "NanoShadowrocket - 极轻量 Windows 代理客户端"
 authors = ["Gort"]
 license = "MIT"
-repository = ""
+repository = "https://github.com/Gort-Li/NanoShadowrocket"
 edition = "2021"
 rust-version = "1.90"
 
@@ -52,11 +52,16 @@ winreg = "0.55"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Networking_WinInet",
+    "Win32_Security",
+    "Win32_System",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
 tauri = { version = "2.12.5", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 
 # 关闭 LTO 并放开并行单元：安装包只比 thin LTO 大 0.2MB，
 # 但省掉每次打包近两分钟的链接时间，日常迭代优先。

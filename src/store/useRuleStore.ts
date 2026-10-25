@@ -1,5 +1,12 @@
 import { create } from "zustand";
 
+import {
+  parseCustomRules,
+  serializeCustomRules,
+  upsertCustomRule,
+  type CustomRule,
+} from "../lib/customRules";
+import { POLICY_LABEL } from "../lib/format";
 import { demoRuleTest } from "../lib/mock";
 import { errorMessage, invoke, isTauri } from "../lib/tauri";
 import type { RemoteOutcome, RemoteRule, RuleTestResult, RulesSummary } from "../lib/types";
@@ -18,6 +25,8 @@ interface RuleStore {
   setCustom: (text: string) => void;
   resetCustom: () => void;
   saveCustom: () => Promise<void>;
+  saveCustomText: (text: string, success: string) => Promise<void>;
+  applyQuickRule: (rule: CustomRule) => Promise<void>;
 
   addRemote: (name: string, url: string, intervalHours: number) => Promise<boolean>;
   removeRemote: (id: string) => Promise<void>;
@@ -61,23 +70,46 @@ export const useRuleStore = create<RuleStore>((set, get) => ({
   },
 
   saveCustom: async () => {
-    const text = get().custom;
+    await get().saveCustomText(get().custom, "自定义规则已生效");
+  },
+
+  saveCustomText: async (text, success) => {
+    set({ custom: text });
     if (get().previewMode()) {
-      set({ summary: get().summary });
-      toast("自定义规则已保存（预览模式）", "ok");
+      const current = get().summary;
+      if (current) {
+        const count = parseCustomRules(text).rules.length;
+        set({
+          summary: {
+            ...current,
+            custom: count,
+            total: Math.max(0, current.total + count - current.custom),
+          },
+        });
+      }
+      toast(`${success}（预览模式）`, "ok");
       return;
     }
+    if (get().saving) return;
     set({ saving: true });
     try {
       const summary = await invoke<RulesSummary>("save_custom_rules", { text });
       set({ summary });
       useAppStore.getState().applyRules(summary);
-      toast("自定义规则已生效", "ok");
+      toast(success, "ok");
     } catch (err) {
       toast(errorMessage(err), "error");
     } finally {
       set({ saving: false });
     }
+  },
+
+  applyQuickRule: async (rule) => {
+    const parsed = parseCustomRules(get().custom);
+    const next = upsertCustomRule(parsed.rules, rule);
+    const text = serializeCustomRules(next, parsed.unsupported);
+    const target = rule.kind === "FINAL" ? "FINAL" : `${rule.kind},${rule.value}`;
+    await get().saveCustomText(text, `已配置 ${target} → ${POLICY_LABEL[rule.policy]}`);
   },
 
   addRemote: async (name, url, intervalHours) => {

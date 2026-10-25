@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "bun run build"
+    "beforeDevCommand": "bun run prepare:sidecar && bun run dev",
+    "beforeBuildCommand": "bun run prepare:sidecar && bun run build"
   },
   "app": {
     "windows": [
@@ -30,9 +30,23 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNDMzk3NUMwN0NFQTQwRUYKUldUdlFPcDh3SFU1UEFZVTE4N2ZtSEJxM29oME5GNlhoaEZmamRWVWZyUDlnaWs2em9YbjVIMkgK",
+      "endpoints": [
+        "https://github.com/Gort-Li/NanoShadowrocket/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "externalBin": ["binaries/v2ray"],
+    "resources": ["resources/v2ray-LICENSE.txt"],
     "windows": {
       "nsis": {
         "installerHooks": "./windows/nsis-hooks.nsh"

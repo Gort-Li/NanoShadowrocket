@@ -41,7 +41,7 @@ pub fn parse_link(input: &str) -> Result<ParsedLink, LinkError> {
     let rest = rest.split_whitespace().next().unwrap_or(rest);
 
     let (body, query) = match rest.split_once('?') {
-        Some((body, query)) => (body, Some(query)),
+        Some((body, query)) => (body, Some(query.split('#').next().unwrap_or(query))),
         None => (rest, None),
     };
 
@@ -84,6 +84,25 @@ fn json_str(value: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
+fn json_bool(value: &Value, keys: &[&str]) -> Option<bool> {
+    for key in keys {
+        match value.get(*key) {
+            Some(Value::Bool(v)) => return Some(*v),
+            Some(Value::Number(n)) => return Some(n.as_u64().unwrap_or(0) != 0),
+            Some(Value::String(s)) => return Some(parse_bool(s)),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_bool(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn parse_json_link(text: &str) -> Result<ParsedLink, LinkError> {
     let value: Value = serde_json::from_str(text).map_err(|_| LinkError::Json)?;
 
@@ -104,6 +123,7 @@ fn parse_json_link(text: &str) -> Result<ParsedLink, LinkError> {
     let security_raw =
         json_str(&value, &["scy", "security", "method"]).unwrap_or_else(|| "auto".into());
     let security = parse_security(&security_raw)?;
+    let udp = json_bool(&value, &["udp"]).unwrap_or(true);
     let net = json_str(&value, &["net", "network"]).unwrap_or_else(|| "tcp".into());
     let transport = Transport::parse(&net);
     let tls = json_str(&value, &["tls"]).unwrap_or_default();
@@ -120,10 +140,6 @@ fn parse_json_link(text: &str) -> Result<ParsedLink, LinkError> {
     if !tls.is_empty() && !tls.eq_ignore_ascii_case("none") {
         warnings.push("该节点启用了 TLS，当前版本尚未实现，连接会失败".into());
     }
-    if alter_id != 0 {
-        warnings.push("该节点 alterId 不为 0，当前版本仅支持 AEAD（alterId = 0）".into());
-    }
-
     Ok(ParsedLink {
         node: NodeEntry {
             id: uuid::Uuid::new_v4().to_string(),
@@ -136,6 +152,7 @@ fn parse_json_link(text: &str) -> Result<ParsedLink, LinkError> {
                 alter_id,
                 security,
             },
+            udp,
             latency_ms: None,
         },
         warnings,
@@ -167,6 +184,8 @@ fn parse_legacy_link(text: &str, query: Option<&str>) -> Result<ParsedLink, Link
 
     let mut transport = Transport::Tcp;
     let mut name = None;
+    let mut alter_id = 0u16;
+    let mut udp = true;
     let mut warnings = Vec::new();
     if let Some(query) = query {
         for pair in query.split('&') {
@@ -177,6 +196,12 @@ fn parse_legacy_link(text: &str, query: Option<&str>) -> Result<ParsedLink, Link
             match key.to_ascii_lowercase().as_str() {
                 "remarks" | "remark" | "ps" if !value.is_empty() => name = Some(value),
                 "obfs" => transport = Transport::parse(&value),
+                "alterid" | "aid" => {
+                    alter_id = value.trim().parse().map_err(|_| {
+                        LinkError::Invalid(format!("alterId 非法：{}", value.trim()))
+                    })?;
+                }
+                "udp" => udp = parse_bool(&value),
                 _ => {}
             }
         }
@@ -197,9 +222,10 @@ fn parse_legacy_link(text: &str, query: Option<&str>) -> Result<ParsedLink, Link
                 host: host.trim().to_string(),
                 port,
                 uuid,
-                alter_id: 0,
+                alter_id,
                 security: parse_security(security_raw)?,
             },
+            udp,
             latency_ms: None,
         },
         warnings,
@@ -228,8 +254,11 @@ fn parse_security(raw: &str) -> Result<CipherMethod, LinkError> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "" | "auto" | "aes-128-gcm" | "aes128gcm" => Ok(CipherMethod::Aes128Gcm),
         "chacha20-poly1305" | "chacha20poly1305" | "chacha20" => Ok(CipherMethod::ChaCha20Poly1305),
+        "legacy" | "aes-128-cfb" | "aes128cfb" | "aes-256-cfb" | "aes256cfb" => {
+            Ok(CipherMethod::Legacy)
+        }
         other => Err(LinkError::Invalid(format!(
-            "暂不支持加密方式 {other}，可选 auto / aes-128-gcm / chacha20-poly1305"
+            "暂不支持加密方式 {other}，可选 auto / aes-128-gcm / chacha20-poly1305 / legacy"
         ))),
     }
 }
@@ -286,11 +315,26 @@ mod tests {
     #[test]
     fn parses_legacy_shadowrocket_link() {
         let inner = "auto:b831381d-6324-4d53-ad4f-8cda48b30811@hk.example.com:8443";
-        let link = format!("vmess://{}?remarks=%E9%A6%99%E6%B8%AF&obfs=tcp", b64(inner));
+        let link = format!(
+            "vmess://{}?remarks=%E9%A6%99%E6%B8%AF&obfs=tcp&alterId=64&udp=1#frag",
+            b64(inner)
+        );
         let parsed = parse_link(&link).unwrap();
         assert_eq!(parsed.node.name, "香港");
         assert_eq!(parsed.node.config.host, "hk.example.com");
         assert_eq!(parsed.node.config.port, 8443);
+        assert_eq!(parsed.node.config.alter_id, 64);
+        assert!(parsed.node.udp);
+        assert!(parsed.node.outbound_config().is_ok());
+    }
+
+    #[test]
+    fn legacy_link_can_disable_udp_and_use_cfb() {
+        let inner = "aes-128-cfb:b831381d-6324-4d53-ad4f-8cda48b30811@hk.example.com:8443";
+        let link = format!("vmess://{}?alterId=64&udp=0", b64(inner));
+        let parsed = parse_link(&link).unwrap();
+        assert_eq!(parsed.node.config.security, CipherMethod::Legacy);
+        assert!(!parsed.node.udp);
     }
 
     #[test]

@@ -91,6 +91,17 @@ async function currentWindow() {
   return getCurrentWindow();
 }
 
+/** 运行时版本号，来自构建时写入的 tauri.conf.json，避免 UI 里再硬编码一份。 */
+export async function appVersion(): Promise<string> {
+  if (!isTauri) return "preview";
+  try {
+    const { getVersion } = await import("@tauri-apps/api/app");
+    return await getVersion();
+  } catch {
+    return "unknown";
+  }
+}
+
 export async function minimizeWindow(): Promise<void> {
   if (!isTauri) return;
   await (await currentWindow()).minimize();

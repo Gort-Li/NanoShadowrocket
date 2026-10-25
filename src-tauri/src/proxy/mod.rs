@@ -5,16 +5,20 @@ pub mod error;
 pub mod inbound;
 pub mod outbound;
 pub mod router;
+pub mod socks5_client;
 pub mod stats;
 pub mod target;
+pub mod udp;
 
 pub use dns::{DnsResolver, DnsSetting};
 pub use error::ProxyError;
 pub use inbound::{start, InboundDeps, InboundHandle};
 pub use outbound::{
-    build_outbound, BoxedStream, DirectOutbound, Outbound, OutboundConfig, RejectOutbound,
-    VmessOutbound,
+    BoxedStream, DirectOutbound, Outbound, RejectOutbound, SidecarOutbound, VmessOutbound,
 };
 pub use router::{RouteDecision, Router, RouterHandle, RuleTestResult};
-pub use stats::{ConnectionEntry, ConnectionLog, TrafficSnapshot, TrafficStats};
+pub use stats::{
+    ActiveConnection, ActiveConnections, ConnectionProtocol, TrafficSnapshot, TrafficStats,
+};
 pub use target::Target;
+pub use udp::{DirectUdpOutbound, RejectUdpOutbound, SidecarUdpOutbound, UdpFlow, UdpOutbound};

@@ -2,10 +2,16 @@ import { create } from "zustand";
 
 import { demoBootstrap, demoHistory } from "../lib/mock";
 import { errorMessage, invoke, isTauri } from "../lib/tauri";
+import {
+  checkForUpdate,
+  downloadPendingUpdate,
+  installDownloadedUpdate,
+  type UpdateInfo,
+} from "../lib/update";
 import type {
+  ActiveConnection,
   AppConfig,
   Bootstrap,
-  ConnectionEntry,
   HistoryPoint,
   LatencyResult,
   Node,
@@ -35,6 +41,26 @@ const EMPTY_TRAFFIC: TrafficStats = {
   totalConnections: 0,
 };
 
+export interface UpdateState {
+  checking: boolean;
+  available: UpdateInfo | null;
+  installing: boolean;
+  /** 下载进度 0-100。 */
+  progress: number;
+  error: string | null;
+  /** 用户点了「稍后提醒」，本次会话不再弹提示。 */
+  dismissed: boolean;
+}
+
+const EMPTY_UPDATE: UpdateState = {
+  checking: false,
+  available: null,
+  installing: false,
+  progress: 0,
+  error: null,
+  dismissed: false,
+};
+
 const HISTORY_LEN = 60;
 let toastSeq = 0;
 let previewTimer: ReturnType<typeof setInterval> | null = null;
@@ -47,9 +73,10 @@ interface AppStore {
   status: ProxyStatus | null;
   rules: RulesSummary | null;
   traffic: TrafficStats;
-  recent: ConnectionEntry[];
+  active: ActiveConnection[];
   history: HistoryPoint[];
   toasts: Toast[];
+  update: UpdateState;
 
   init: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -69,6 +96,10 @@ interface AppStore {
   resetConfig: () => Promise<void>;
   clearRuleCache: () => Promise<void>;
 
+  checkUpdate: (silent?: boolean) => Promise<void>;
+  installUpdate: () => Promise<void>;
+  dismissUpdate: () => void;
+
   toast: (message: string, kind?: ToastKind) => void;
   dismissToast: (id: number) => void;
 }
@@ -82,6 +113,29 @@ function emptyHistory(): HistoryPoint[] {
   return Array.from({ length: HISTORY_LEN }, () => ({ up: 0, down: 0 }));
 }
 
+/** 设置保存后立即把受影响的运行态字段合并进去，避免等下一次事件才刷新首页。 */
+function withSettingsStatus(
+  status: ProxyStatus | null,
+  input: SettingsInput
+): ProxyStatus | null {
+  if (!status) return status;
+  return {
+    ...status,
+    localPort: input.listenPort,
+    allowLan: input.allowLan,
+    defaultPolicy: input.defaultPolicy,
+    systemProxy: input.systemProxy,
+    envProxy: input.proxyEnv,
+  };
+}
+
+function withSettingsRules(
+  rules: RulesSummary | null,
+  input: SettingsInput
+): RulesSummary | null {
+  return rules ? { ...rules, defaultPolicy: input.defaultPolicy } : rules;
+}
+
 export const useAppStore = create<AppStore>((set, get) => ({
   ready: false,
   preview: false,
@@ -90,9 +144,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   status: null,
   rules: null,
   traffic: EMPTY_TRAFFIC,
-  recent: [],
+  active: [],
   history: emptyHistory(),
   toasts: [],
+  update: EMPTY_UPDATE,
 
   init: async () => {
     let data: Bootstrap;
@@ -111,12 +166,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
       status: data.status,
       rules: data.rules,
       traffic: data.stats,
-      recent: data.recent,
+      active: data.active,
       history: isTauri ? pushHistory(emptyHistory(), data.stats) : demoHistory(),
     });
     useRuleStore.getState().hydrate(data.config.customRules, data.config.remoteRules, data.rules);
 
-    if (!isTauri) startPreviewTicker(set, get);
+    if (!isTauri) {
+      startPreviewTicker(set, get);
+    } else {
+      // 启动后延迟检查，避免和首屏加载、规则编译抢带宽。
+      setTimeout(() => void get().checkUpdate(true), 6000);
+    }
   },
 
   refresh: async () => {
@@ -128,7 +188,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         status: data.status,
         rules: data.rules,
         traffic: data.stats,
-        recent: data.recent,
+        active: data.active,
         history: pushHistory(get().history, data.stats),
       });
       useRuleStore
@@ -154,7 +214,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             systemProxy: running && (get().config?.systemProxy ?? true),
             envProxy: running && (get().config?.proxyEnv ?? false),
           },
-          recent: running ? get().recent : [],
+          active: running ? demoBootstrap().active : [],
         });
         get().toast(running ? "已开启代理（预览模式）" : "已关闭代理", "ok");
         return;
@@ -175,7 +235,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const status = get().status;
     set({
       traffic: payload.stats,
-      recent: payload.recent,
+      active: payload.active,
       history: pushHistory(get().history, payload.stats),
       status: status ? { ...status, running: payload.running } : status,
     });
@@ -388,22 +448,48 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   saveSettings: async (input) => {
+    const before = {
+      config: get().config,
+      status: get().status,
+      rules: get().rules,
+    };
+    const config = before.config;
+    if (!config) return false;
+
+    const nextStatus = withSettingsStatus(before.status, input);
+    const nextRules = withSettingsRules(before.rules, input);
+
     if (get().preview) {
-      const config = get().config;
-      if (!config) return false;
-      set({ config: { ...config, ...input } });
+      set({ config: { ...config, ...input }, status: nextStatus, rules: nextRules });
+      if (nextRules) useRuleStore.getState().applySummary(nextRules);
       get().toast("设置已保存（预览模式）", "ok");
       return true;
     }
-    set({ busy: true });
+
+    // 先更新 UI，再等待后端；端口 / 系统代理等需要重启的设置在返回后会由事件校正。
+    set({
+      busy: true,
+      config: { ...config, ...input },
+      status: nextStatus,
+      rules: nextRules,
+    });
     try {
       const status = await invoke<ProxyStatus>("update_settings", { input });
-      const config = get().config;
-      if (config) set({ config: { ...config, ...input }, status });
+      set({
+        config: { ...get().config!, ...input },
+        status,
+        rules: withSettingsRules(get().rules, input),
+      });
+      if (nextRules) useRuleStore.getState().applySummary(get().rules!);
       get().toast("设置已保存", "ok");
       return true;
     } catch (err) {
-      get().toast(errorMessage(err), "error");
+      const message = errorMessage(err);
+      // update_settings 可能已经落盘（例如端口被占用时配置已写入），
+      // 重新拉取后端真实状态，避免 UI 回滚到与磁盘不一致的旧配置。
+      set(before);
+      await get().refresh();
+      get().toast(message, "error");
       return false;
     } finally {
       set({ busy: false });
@@ -448,6 +534,56 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
+  checkUpdate: async (silent = false) => {
+    if (get().preview) {
+      if (!silent) get().toast("浏览器预览模式无法检查更新", "info");
+      return;
+    }
+    if (get().update.checking || get().update.installing) return;
+
+    set({ update: { ...get().update, checking: true, error: null } });
+    try {
+      const info = await checkForUpdate();
+      set({ update: { ...get().update, checking: false, available: info } });
+      if (!info) {
+        if (!silent) get().toast("已是最新版本", "ok");
+      } else if (!get().update.dismissed) {
+        get().toast(`发现新版本 v${info.version}，可在设置页更新`, "info");
+      }
+    } catch (err) {
+      const message = errorMessage(err);
+      set({ update: { ...get().update, checking: false, error: message } });
+      if (!silent) get().toast(message, "error");
+    }
+  },
+
+  installUpdate: async () => {
+    const { update } = get();
+    if (!update.available || update.installing) return;
+
+    // 先上锁，避免下载 / 停代理期间重复点击触发两次安装。
+    set({ update: { ...update, installing: true, progress: 0, error: null } });
+    try {
+      await downloadPendingUpdate((progress) =>
+        set({ update: { ...get().update, progress: progress.percent } })
+      );
+
+      // 安装器要替换正在运行的 exe，下载完成后再停掉入站并还原系统代理。
+      if (get().status?.running) {
+        const next = await invoke<ProxyStatus>("stop_proxy");
+        set({ status: next });
+      }
+
+      await installDownloadedUpdate();
+    } catch (err) {
+      const message = errorMessage(err);
+      set({ update: { ...get().update, installing: false, error: message } });
+      get().toast(message, "error");
+    }
+  },
+
+  dismissUpdate: () => set({ update: { ...get().update, dismissed: true } }),
+
   toast: (message, kind = "info") => {
     const id = ++toastSeq;
     set({ toasts: [...get().toasts, { id, message, kind }] });
@@ -478,13 +614,13 @@ function startPreviewTicker(
       downTotal: traffic.downTotal + downRate,
       upRate,
       downRate,
-      active: 3 + Math.floor(Math.random() * 6),
+      active: demoBootstrap().active.length,
       totalConnections: traffic.totalConnections + (Math.random() > 0.7 ? 1 : 0),
     };
     set({
       traffic: next,
       history: pushHistory(get().history, next),
-      recent: demoBootstrap().recent,
+      active: demoBootstrap().active,
     });
   }, 1000);
 }

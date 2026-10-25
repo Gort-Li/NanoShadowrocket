@@ -1,15 +1,14 @@
 //! 出站抽象。
 //!
-//! 路由层只认识 [`Outbound`] trait，因此未来把 VMess 换成 Go sidecar
-//! 或补上 ws/tls 传输时，只需要替换 [`build_outbound`] 的实现。
-
-use std::sync::Arc;
+//! 路由层只认识 [`Outbound`] trait；生产路径在 `AppState::start` 里选择
+//! sidecar 出站或直连，新增传输时不要改路由层。
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
 use super::error::ProxyError;
+use super::socks5_client;
 use super::target::Target;
 use crate::vmess::{VmessAddress, VmessConfig, VmessStream};
 
@@ -96,19 +95,27 @@ impl Outbound for VmessOutbound {
     }
 }
 
-/// 可序列化的出站配置。
-#[derive(Debug, Clone)]
-pub enum OutboundConfig {
-    Direct,
-    Reject,
-    Vmess(VmessConfig),
+/// 通过本地 v2ray-core 的 SOCKS 入站建立 TCP 连接。
+#[derive(Debug, Clone, Copy)]
+pub struct SidecarOutbound {
+    proxy: std::net::SocketAddr,
 }
 
-pub fn build_outbound(config: &OutboundConfig) -> Arc<dyn Outbound> {
-    match config {
-        OutboundConfig::Direct => Arc::new(DirectOutbound),
-        OutboundConfig::Reject => Arc::new(RejectOutbound),
-        OutboundConfig::Vmess(vmess) => Arc::new(VmessOutbound::new(vmess.clone())),
+impl SidecarOutbound {
+    pub fn new(proxy: std::net::SocketAddr) -> Self {
+        Self { proxy }
+    }
+}
+
+#[async_trait]
+impl Outbound for SidecarOutbound {
+    fn kind(&self) -> &'static str {
+        "vmess-sidecar"
+    }
+
+    async fn connect(&self, target: &Target) -> Result<BoxedStream, ProxyError> {
+        let stream = socks5_client::connect(self.proxy, target).await?;
+        Ok(Box::new(stream))
     }
 }
 

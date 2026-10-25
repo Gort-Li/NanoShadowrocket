@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装前端依赖
+        run: bun install --frozen-lockfile
+
+      - name: 版本号一致性
+        run: bun scripts/set-version.mjs --check
+
+      - name: 前端类型检查与构建
+        run: bun run build
+
+      - name: 格式检查
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: 静态检查
+        working-directory: src-tauri
+        run: cargo clippy --lib --tests -- -D warnings
+
+      - name: 单元测试
+        working-directory: src-tauri
+        run: cargo test --lib

@@ -4,17 +4,23 @@
   "version": "0.1.0",
   "type": "module",
   "description": "NanoShadowrocket - 极轻量 Windows 代理客户端",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gort-Li/NanoShadowrocket.git"
+  },
   "packageManager": "bun@1.4.2",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "prepare:sidecar": "bun scripts/fetch-v2ray.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-updater": "^2",
     "clsx": "^2.1.1",
     "lucide-react": "^0.469.0",
     "react": "^19.1.1",

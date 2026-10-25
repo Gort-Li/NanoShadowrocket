@@ -5,7 +5,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::proxy::stats::{ConnectionEntry, TrafficSnapshot};
+use crate::proxy::stats::{ActiveConnection, TrafficSnapshot};
 use crate::state::ProxyStatus;
 
 pub const TRAFFIC: &str = "nano:traffic";
@@ -18,7 +18,7 @@ pub const REMOTE: &str = "nano:remote";
 pub struct TrafficPayload {
     pub stats: TrafficSnapshot,
     pub running: bool,
-    pub recent: Vec<ConnectionEntry>,
+    pub active: Vec<ActiveConnection>,
 }
 
 pub fn traffic(app: &AppHandle, payload: &TrafficPayload) {

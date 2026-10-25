@@ -2,7 +2,7 @@ export type Policy = "proxy" | "direct" | "reject";
 
 export type Transport = "tcp" | "ws" | "grpc" | "h2" | "quic" | "kcp" | "http";
 
-export type Security = "aes-128-gcm" | "chacha20-poly1305";
+export type Security = "aes-128-gcm" | "chacha20-poly1305" | "legacy";
 
 export type RemoteStatus = "idle" | "ok" | "error";
 
@@ -31,6 +31,7 @@ export interface Node {
   uuid: string;
   alterId: number;
   security: Security;
+  udp: boolean;
   latencyMs: number | null;
 }
 
@@ -106,12 +107,16 @@ export interface TrafficStats {
   totalConnections: number;
 }
 
-export interface ConnectionEntry {
+export type ConnectionProtocol = "tcp" | "udp";
+
+export interface ActiveConnection {
+  id: number;
   host: string;
   port: number;
   policy: Policy;
   rule: string | null;
-  at: number;
+  startedAt: number;
+  protocol: ConnectionProtocol;
 }
 
 export interface Bootstrap {
@@ -119,7 +124,7 @@ export interface Bootstrap {
   rules: RulesSummary;
   status: ProxyStatus;
   stats: TrafficStats;
-  recent: ConnectionEntry[];
+  active: ActiveConnection[];
 }
 
 export interface RuleTestResult {
@@ -159,6 +164,7 @@ export interface NodeInput {
   alterId: number;
   security: Security;
   transport: Transport;
+  udp: boolean;
 }
 
 export interface SettingsInput {
@@ -175,7 +181,7 @@ export interface SettingsInput {
 export interface TrafficPayload {
   stats: TrafficStats;
   running: boolean;
-  recent: ConnectionEntry[];
+  active: ActiveConnection[];
 }
 
 export interface AddNodeResult {

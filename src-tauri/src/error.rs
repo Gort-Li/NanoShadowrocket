@@ -41,6 +41,9 @@ pub enum AppError {
     #[error("{0}")]
     Unsupported(String),
 
+    #[error("内置 v2ray 内核错误：{0}")]
+    Sidecar(String),
+
     #[error("网络错误：{0}")]
     Network(String),
 
@@ -64,6 +67,7 @@ impl AppError {
             AppError::Proxy(err) => err.code(),
             AppError::Invalid(_) => "invalid_input",
             AppError::Unsupported(_) => "unsupported_config",
+            AppError::Sidecar(_) => "sidecar_error",
             AppError::Network(_) => "network_error",
             AppError::Io(_) => "io_error",
             AppError::Internal(_) => "internal_error",

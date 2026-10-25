@@ -38,6 +38,9 @@ pub enum CipherMethod {
     Aes128Gcm,
     #[serde(rename = "chacha20-poly1305")]
     ChaCha20Poly1305,
+    /// 旧版 `aes-*-cfb`。原生 AEAD 实现不处理，交给 sidecar 映射成 `auto`。
+    #[serde(rename = "legacy")]
+    Legacy,
 }
 
 impl CipherMethod {
@@ -45,6 +48,7 @@ impl CipherMethod {
         match self {
             CipherMethod::Aes128Gcm => 3,
             CipherMethod::ChaCha20Poly1305 => 4,
+            CipherMethod::Legacy => 1,
         }
     }
 
@@ -52,6 +56,7 @@ impl CipherMethod {
         match self {
             CipherMethod::Aes128Gcm => "aes-128-gcm",
             CipherMethod::ChaCha20Poly1305 => "chacha20-poly1305",
+            CipherMethod::Legacy => "legacy",
         }
     }
 }
@@ -177,6 +182,11 @@ impl BodyCipher {
                 BodyCipher::ChaCha(Box::new(
                     ChaCha20Poly1305::new_from_slice(&key)
                         .map_err(|e| VmessError::Crypto(e.to_string()))?,
+                ))
+            }
+            CipherMethod::Legacy => {
+                return Err(VmessError::Unsupported(
+                    "legacy 加密仅由内置 v2ray 内核处理".into(),
                 ))
             }
         })

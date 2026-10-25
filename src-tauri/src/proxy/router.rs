@@ -153,6 +153,11 @@ impl Router {
         }
     }
 
+    /// 用当前路由器配置的 DNS 解析域名，供直连 UDP 使用。
+    pub async fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, String> {
+        self.dns.resolve(host).await.map_err(|e| e.to_string())
+    }
+
     /// 规则测试器：输入域名（可带 scheme / 路径 / 端口），返回命中详情。
     pub async fn test(&self, input: &str) -> RuleTestResult {
         let normalized = normalize_input(input);

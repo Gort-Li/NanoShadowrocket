@@ -1,4 +1,4 @@
-import type { Bootstrap, ConnectionEntry, HistoryPoint, Node, RuleTestResult } from "./types";
+import type { ActiveConnection, Bootstrap, HistoryPoint, Node, RuleTestResult } from "./types";
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -12,6 +12,7 @@ const NODES: Node[] = [
     uuid: "b831381d-6324-4d53-ad4f-8cda48b30811",
     alterId: 0,
     security: "aes-128-gcm",
+    udp: true,
     latencyMs: 62,
   },
   {
@@ -23,6 +24,7 @@ const NODES: Node[] = [
     uuid: "9c2f74b1-1f4e-4b7e-9a02-73c4f0aa2e10",
     alterId: 0,
     security: "chacha20-poly1305",
+    udp: true,
     latencyMs: 148,
   },
   {
@@ -34,17 +36,21 @@ const NODES: Node[] = [
     uuid: "5a61c9e4-2a3b-49fb-8d43-91a0c7be3312",
     alterId: 0,
     security: "aes-128-gcm",
+    udp: true,
     latencyMs: null,
   },
 ];
 
-const RECENT: ConnectionEntry[] = [
-  { host: "github.com", port: 443, policy: "proxy", rule: "DOMAIN-SUFFIX,github.com,Proxy", at: NOW - 6 },
-  { host: "api.githubcopilot.com", port: 443, policy: "proxy", rule: "DOMAIN-KEYWORD,github,Proxy", at: NOW - 21 },
-  { host: "cdn.jsdelivr.net", port: 443, policy: "direct", rule: "DOMAIN-SUFFIX,jsdelivr.net,Direct", at: NOW - 38 },
-  { host: "pagead2.googlesyndication.com", port: 443, policy: "reject", rule: "DOMAIN-KEYWORD,doubleclick,Reject", at: NOW - 54 },
-  { host: "www.bilibili.com", port: 443, policy: "direct", rule: "DOMAIN-SUFFIX,bilibili.com,Direct", at: NOW - 71 },
-  { host: "clash.razord.top", port: 443, policy: "proxy", rule: "DOMAIN-SUFFIX,razord.top,Proxy", at: NOW - 92 },
+const ACTIVE: ActiveConnection[] = [
+  { id: 1, host: "github.com", port: 443, policy: "proxy", rule: "DOMAIN-SUFFIX,github.com,Proxy", startedAt: NOW - 3725, protocol: "tcp" },
+  { id: 2, host: "github.com", port: 22, policy: "proxy", rule: "DOMAIN-SUFFIX,github.com,Proxy", startedAt: NOW - 2810, protocol: "tcp" },
+  { id: 3, host: "api.github.com", port: 443, policy: "proxy", rule: "DOMAIN-SUFFIX,github.com,Proxy", startedAt: NOW - 1800, protocol: "tcp" },
+  { id: 4, host: "raw.githubusercontent.com", port: 443, policy: "proxy", rule: "DOMAIN-KEYWORD,github,Proxy", startedAt: NOW - 920, protocol: "tcp" },
+  { id: 5, host: "api.githubcopilot.com", port: 443, policy: "proxy", rule: "DOMAIN-KEYWORD,github,Proxy", startedAt: NOW - 640, protocol: "tcp" },
+  { id: 6, host: "cdn.jsdelivr.net", port: 443, policy: "direct", rule: "DOMAIN-SUFFIX,jsdelivr.net,Direct", startedAt: NOW - 510, protocol: "tcp" },
+  { id: 7, host: "www.bilibili.com", port: 443, policy: "direct", rule: "DOMAIN-SUFFIX,bilibili.com,Direct", startedAt: NOW - 320, protocol: "tcp" },
+  { id: 8, host: "api.bilibili.com", port: 443, policy: "direct", rule: "DOMAIN-SUFFIX,bilibili.com,Direct", startedAt: NOW - 180, protocol: "tcp" },
+  { id: 9, host: "1.1.1.1", port: 53, policy: "direct", rule: "IP-CIDR,1.1.1.1/32,Direct,no-resolve", startedAt: NOW - 90, protocol: "udp" },
 ];
 
 /** 预览模式下的历史曲线，让首屏就能看到完整形态。 */
@@ -163,10 +169,10 @@ export function demoBootstrap(): Bootstrap {
       downTotal: 86_420_117,
       upRate: 18_400,
       downRate: 342_000,
-      active: 5,
+      active: ACTIVE.length,
       totalConnections: 47,
     },
-    recent: RECENT,
+    active: ACTIVE,
   };
 }
 

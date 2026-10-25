@@ -1,9 +1,10 @@
-//! 流量统计与最近连接记录。
+//! 流量统计与活动连接记录。
 //!
 //! 计数全部使用原子操作，转发线程只在每次 read 之后累加，不参与格式化；
 //! 速率由 1 秒一次的采样任务计算，前端只负责渲染。
+//! 活动连接用 RAII guard 维护：连接任务结束时自动移除，不需要扫描超时。
 
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -133,45 +134,81 @@ impl Drop for ActiveGuard<'_> {
     }
 }
 
-/// 最近连接记录中的一条。
+/// 连接使用的传输层协议，前端用于展示 TCP / UDP 标记。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionProtocol {
+    Tcp,
+    Udp,
+}
+
+/// 当前仍然打开的一条连接。UDP 关联按目标去重，关联结束时统一移除。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectionEntry {
+pub struct ActiveConnection {
+    pub id: u64,
     pub host: String,
     pub port: u16,
     pub policy: Policy,
     pub rule: Option<String>,
     /// Unix 秒
-    pub at: u64,
+    pub started_at: u64,
+    pub protocol: ConnectionProtocol,
 }
 
-/// 固定容量的环形缓冲区，保留最近 N 条连接。
-pub struct ConnectionLog {
-    limit: usize,
-    entries: Mutex<VecDeque<ConnectionEntry>>,
+/// 活动连接表。每次连接开始创建一个 guard，guard 析构时从表中删除。
+pub struct ActiveConnections {
+    next_id: AtomicU64,
+    entries: Mutex<HashMap<u64, ActiveConnection>>,
 }
 
-impl ConnectionLog {
-    pub fn new(limit: usize) -> Self {
+impl Default for ActiveConnections {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActiveConnections {
+    pub fn new() -> Self {
         Self {
-            limit: limit.max(1),
-            entries: Mutex::new(VecDeque::with_capacity(limit.min(32))),
+            next_id: AtomicU64::new(1),
+            entries: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn push(&self, entry: ConnectionEntry) {
+    pub fn begin(
+        &self,
+        host: String,
+        port: u16,
+        policy: Policy,
+        rule: Option<String>,
+        protocol: ConnectionProtocol,
+    ) -> ConnectionGuard<'_> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let entry = ActiveConnection {
+            id,
+            host,
+            port,
+            policy,
+            rule,
+            started_at: crate::rules::now_secs(),
+            protocol,
+        };
         if let Ok(mut entries) = self.entries.lock() {
-            entries.push_front(entry);
-            while entries.len() > self.limit {
-                entries.pop_back();
-            }
+            entries.insert(id, entry);
         }
+        ConnectionGuard { table: self, id }
     }
 
-    pub fn snapshot(&self) -> Vec<ConnectionEntry> {
+    /// 按开始时间稳定排序，前端再做策略 / 主域名分组。
+    pub fn snapshot(&self) -> Vec<ActiveConnection> {
         self.entries
             .lock()
-            .map(|entries| entries.iter().cloned().collect())
+            .map(|entries| {
+                let mut items: Vec<_> = entries.values().cloned().collect();
+                items.sort_by_key(|entry| (entry.started_at, entry.id));
+                items
+            })
             .unwrap_or_default()
     }
 
@@ -182,19 +219,22 @@ impl ConnectionLog {
     }
 }
 
+pub struct ConnectionGuard<'a> {
+    table: &'a ActiveConnections,
+    id: u64,
+}
+
+impl Drop for ConnectionGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut entries) = self.table.entries.lock() {
+            entries.remove(&self.id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn entry(host: &str) -> ConnectionEntry {
-        ConnectionEntry {
-            host: host.into(),
-            port: 443,
-            policy: Policy::Proxy,
-            rule: Some("DOMAIN-SUFFIX,example.com,Proxy".into()),
-            at: 1_700_000_000,
-        }
-    }
 
     #[test]
     fn tracks_bytes_and_connections() {
@@ -235,15 +275,43 @@ mod tests {
     }
 
     #[test]
-    fn recent_log_is_bounded_and_newest_first() {
-        let log = ConnectionLog::new(3);
-        for i in 0..5 {
-            log.push(entry(&format!("h{i}.com")));
-        }
-        let items = log.snapshot();
-        assert_eq!(items.len(), 3);
-        assert_eq!(items[0].host, "h4.com");
-        log.clear();
-        assert!(log.snapshot().is_empty());
+    fn active_connections_are_removed_when_guards_drop() {
+        let table = ActiveConnections::new();
+        let first = table.begin(
+            "a.example.com".into(),
+            443,
+            Policy::Proxy,
+            Some("DOMAIN-SUFFIX,example.com,Proxy".into()),
+            ConnectionProtocol::Tcp,
+        );
+        let second = table.begin(
+            "b.example.com".into(),
+            443,
+            Policy::Direct,
+            None,
+            ConnectionProtocol::Udp,
+        );
+        assert_eq!(table.snapshot().len(), 2);
+        drop(first);
+        let items = table.snapshot();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].host, "b.example.com");
+        assert_eq!(items[0].protocol, ConnectionProtocol::Udp);
+        drop(second);
+        assert!(table.snapshot().is_empty());
+    }
+
+    #[test]
+    fn clear_removes_all_active_connections() {
+        let table = ActiveConnections::new();
+        let _guard = table.begin(
+            "example.com".into(),
+            443,
+            Policy::Proxy,
+            None,
+            ConnectionProtocol::Tcp,
+        );
+        table.clear();
+        assert!(table.snapshot().is_empty());
     }
 }

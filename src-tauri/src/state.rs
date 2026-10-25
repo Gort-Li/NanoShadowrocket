@@ -17,14 +17,15 @@ use crate::error::AppError;
 use crate::proxy::{
     dns::{DnsResolver, DnsSetting},
     inbound::{self, InboundDeps, InboundHandle},
-    outbound::{DirectOutbound, Outbound, VmessOutbound},
+    outbound::{DirectOutbound, Outbound, SidecarOutbound},
     router::{Router, RouterHandle},
-    stats::{ConnectionEntry, ConnectionLog, TrafficSnapshot, TrafficStats},
+    stats::{ActiveConnection, ActiveConnections, TrafficSnapshot, TrafficStats},
+    udp::{DirectUdpOutbound, RejectUdpOutbound, SidecarUdpOutbound, UdpOutbound},
 };
 use crate::rules::{self, build_ruleset, Policy, SourceText};
+use crate::sidecar::V2raySidecar;
 use crate::sysproxy;
 
-const LOG_LIMIT: usize = 10;
 const LATENCY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,11 +73,12 @@ pub struct Bootstrap {
     pub rules: RulesSummary,
     pub status: ProxyStatus,
     pub stats: TrafficSnapshot,
-    pub recent: Vec<ConnectionEntry>,
+    pub active: Vec<ActiveConnection>,
 }
 
 struct RunningProxy {
     inbound: InboundHandle,
+    sidecar: Option<V2raySidecar>,
     proxy_applied: bool,
     env_applied: bool,
     port: u16,
@@ -90,8 +92,11 @@ pub struct AppState {
     pub rules_dir: PathBuf,
     pub remote_client: Arc<reqwest::Client>,
     pub stats: Arc<TrafficStats>,
-    pub log: Arc<ConnectionLog>,
+    pub active: Arc<ActiveConnections>,
     router: Arc<RouterHandle>,
+    config_dir: PathBuf,
+    #[cfg(test)]
+    native_outbound: bool,
     runtime: AsyncMutex<Option<RunningProxy>>,
 }
 
@@ -133,6 +138,9 @@ impl AppState {
             log::warn!("创建规则缓存目录失败：{err}");
         }
 
+        // 上次崩溃可能留下含 UUID 的 sidecar 配置；单实例下可以安全清理。
+        let _ = std::fs::remove_file(config_dir.join("v2ray-sidecar.json"));
+
         let router = build_router(&cfg, &dir);
         let remote_client = Arc::new(rules::build_client()?);
 
@@ -141,8 +149,11 @@ impl AppState {
             rules_dir: dir,
             remote_client,
             stats: Arc::new(TrafficStats::new()),
-            log: Arc::new(ConnectionLog::new(LOG_LIMIT)),
+            active: Arc::new(ActiveConnections::new()),
             router: RouterHandle::new(router),
+            config_dir: config_dir.to_path_buf(),
+            #[cfg(test)]
+            native_outbound: false,
             runtime: AsyncMutex::new(None),
         };
         Ok(state)
@@ -154,7 +165,7 @@ impl AppState {
             rules: self.rules_summary(),
             status: self.status_sync(),
             stats: self.stats.snapshot(),
-            recent: self.log.snapshot(),
+            active: self.active.snapshot(),
         }
     }
 
@@ -228,8 +239,34 @@ impl AppState {
         let cfg = self.config.snapshot();
         let node = cfg.selected().cloned().ok_or(AppError::NoNode)?;
         let outbound_config = node.outbound_config().map_err(AppError::Unsupported)?;
-        let proxy: Arc<dyn Outbound> = Arc::new(VmessOutbound::new(outbound_config));
+
+        #[cfg(test)]
+        let use_native = self.native_outbound;
+        #[cfg(not(test))]
+        let use_native = false;
+
+        let (proxy, proxy_udp, sidecar): (
+            Arc<dyn Outbound>,
+            Arc<dyn UdpOutbound>,
+            Option<V2raySidecar>,
+        ) = if use_native {
+            (
+                Arc::new(crate::proxy::outbound::VmessOutbound::new(outbound_config)),
+                Arc::new(RejectUdpOutbound),
+                None,
+            )
+        } else {
+            let sidecar =
+                V2raySidecar::start(&outbound_config, node.transport, &self.config_dir).await?;
+            let socks = sidecar.socks_addr();
+            (
+                Arc::new(SidecarOutbound::new(socks)),
+                Arc::new(SidecarUdpOutbound::new(socks)),
+                Some(sidecar),
+            )
+        };
         let direct: Arc<dyn Outbound> = Arc::new(DirectOutbound);
+        let direct_udp: Arc<dyn UdpOutbound> = Arc::new(DirectUdpOutbound);
 
         let ip = if cfg.allow_lan {
             Ipv4Addr::UNSPECIFIED
@@ -240,24 +277,35 @@ impl AppState {
             router: self.router.clone(),
             proxy,
             direct,
+            proxy_udp,
+            direct_udp,
+            udp_enabled: node.udp,
             stats: self.stats.clone(),
-            log: self.log.clone(),
+            active: self.active.clone(),
         };
-        let inbound = inbound::start(SocketAddr::from((ip, cfg.listen_port)), deps).await?;
+        let inbound = match inbound::start(SocketAddr::from((ip, cfg.listen_port)), deps).await {
+            Ok(inbound) => inbound,
+            Err(err) => {
+                drop(sidecar);
+                return Err(err);
+            }
+        };
         let port = inbound.local_addr().port();
 
         let (proxy_applied, env_applied) = match self.apply_host_integration(&cfg, port) {
             Ok(applied) => applied,
             Err(err) => {
                 inbound.shutdown().await;
+                drop(sidecar);
                 return Err(err);
             }
         };
 
         self.stats.reset();
-        self.log.clear();
+        self.active.clear();
         *guard = Some(RunningProxy {
             inbound,
+            sidecar,
             proxy_applied,
             env_applied,
             port,
@@ -270,11 +318,10 @@ impl AppState {
 
     /// 停止入站并还原系统代理。重复调用是幂等的。
     pub async fn stop(&self) -> Result<ProxyStatus, AppError> {
-        let running = {
-            let mut guard = self.runtime.lock().await;
-            guard.take()
-        };
-        let Some(running) = running else {
+        // 整个停止过程持有 runtime 锁，避免并发的 start 写入新的
+        // v2ray-sidecar.json 后被旧 sidecar 的 Drop 删掉。
+        let mut guard = self.runtime.lock().await;
+        let Some(running) = guard.take() else {
             return Ok(self.status_sync());
         };
 
@@ -282,7 +329,9 @@ impl AppState {
             self.restore_all();
         }
         running.inbound.shutdown().await;
+        drop(running.sidecar);
         self.stats.reset();
+        self.active.clear();
         Ok(self.status_sync())
     }
 
@@ -529,7 +578,9 @@ mod tests {
             std::process::id(),
             getrandom::u64().unwrap()
         ));
-        let state = AppState::new(&dir).unwrap();
+        let mut state = AppState::new(&dir).unwrap();
+        // 单测不依赖内置 v2ray 二进制；生产路径在下面的 sidecar 测试里单独覆盖。
+        state.native_outbound = true;
         (state, dir)
     }
 
@@ -558,6 +609,29 @@ mod tests {
         assert_eq!(summary.custom, 1);
         assert_eq!(summary.default_policy, Policy::Proxy);
         assert!(summary.total > 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn reload_rules_uses_new_default_policy() {
+        let (state, dir) = temp_state("default-policy");
+        state
+            .update_config(|c| c.default_policy = Policy::Direct)
+            .unwrap();
+        let summary = state.reload_rules();
+        assert_eq!(summary.default_policy, Policy::Direct);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let decision = runtime.block_on(
+            state
+                .router
+                .get()
+                .decide(&crate::proxy::Target::parse("unmatched.example.com", 443)),
+        );
+        assert_eq!(decision.policy, Policy::Direct);
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -14,16 +14,20 @@
 
 ## 1. 项目是什么
 
-Windows 桌面代理客户端：单端口混合入站（HTTP + SOCKS5）→ 规则分流 → VMess 或直连。
-界面用 React，逻辑全在 Rust，全部跑在 Tauri 的 tokio 运行时里，**没有 sidecar、没有 TUN、没有系统服务**。
+Windows 桌面代理客户端：单端口混合入站（HTTP + SOCKS5）→ 规则分流 → VMess（内置 v2ray-core sidecar）或直连。
+界面用 React，入站 / 规则 / 统计 / 生命周期在 Rust，全部跑在 Tauri 的 tokio 运行时里。
+VMess 的协议细节（AEAD、legacy `alterId`、UDP）交给随安装包分发的 v2ray-core sidecar；
+Rust 只通过本地 SOCKS5 使用它，**没有 TUN、没有系统服务**。
 
-明确不做：Electron、Go 子进程、wintun、UDP 转发、VMess 的 ws/grpc/TLS（当前只做 AEAD + TCP）。
+明确不做：Electron、TUN/wintun、系统服务、把 Go 运行时嵌入主进程。
+sidecar 只作为出站，不接管系统流量；当前 UI 只暴露 `tcp` 传输，ws / grpc / TLS 仍未开放。
 
 ## 2. 工具链与命令
 
 | 场景 | 命令 |
 | --- | --- |
 | 安装依赖 | `bun install` |
+| 下载 / 校验 v2ray sidecar | `bun run prepare:sidecar` |
 | 前端开发（浏览器，自动演示数据） | `bun run dev` |
 | 桌面端开发（推荐） | `bun run tauri:dev` |
 | 前端类型检查 + 构建 | `bun run build` |
@@ -31,22 +35,30 @@ Windows 桌面代理客户端：单端口混合入站（HTTP + SOCKS5）→ 规�
 | 后端格式化 | `cd src-tauri && cargo fmt` |
 | 静态检查（必须 0 警告） | `cargo clippy --lib --tests` |
 | 单元测试 | `cargo test --lib` |
-| VMess 真实互操作测试 | `cargo test --test vmess_e2e -- --ignored --test-threads=1` |
+| 同步版本号 | `bun scripts/set-version.mjs 0.2.0` |
+| 原生 VMess 真实互操作测试 | `cargo test --test vmess_e2e -- --ignored --test-threads=1` |
+| sidecar 真实互操作测试（TCP + UDP + legacy alterId） | `cargo test --test sidecar_e2e -- --ignored --test-threads=1` |
 
 版本基线：Rust 1.90+、Tauri 2.12、React 19、Vite 5、Tailwind 3.4、bun 1.4。
 
 ## 3. 目录地图
 
 ```
+.github/workflows/          ci / release / bump 三个工作流
+scripts/                    set-version.mjs、fetch-v2ray.mjs（sidecar 下载校验）、shot-rules.cjs
+RELEASE.md                  发版手册（密钥、Secrets、流程、故障排查）
+
 src/                         前端
 ├── App.tsx                  页面切换（hash 路由）、事件订阅、快捷键
 ├── pages/                   四个页面：Home / Nodes / Rules / Settings
-├── components/              TitleBar、NavRail、Sheet、ConfirmDialog、RuleEditor…
-├── store/useAppStore.ts     连接、流量、节点、设置、toast
-├── store/useRuleStore.ts    自定义规则、订阅列表、规则测试
+├── components/              TitleBar、NavRail、Sheet、ConfirmDialog、RuleEditor、RuleSheet、ActiveConnections…
+├── store/useAppStore.ts     连接、流量、活动连接、节点、设置、toast
+├── store/useRuleStore.ts    自定义规则、订阅列表、规则测试、一键规则
 ├── lib/tauri.ts             invoke / listen 封装、错误归一化、窗口操作
 ├── lib/types.ts             与后端 serde 一一对应的类型
-├── lib/mock.ts              浏览器预览用的演示数据（含已连接状态）
+├── lib/mock.ts              浏览器预览用的演示数据（含已连接状态与活动连接）
+├── lib/active.ts            主域名启发式、活动连接聚合与策略排序
+├── lib/customRules.ts       自定义规则文本 ↔ 表单模型、校验、upsert
 └── lib/format.ts            速率、流量、时间、策略标签
 
 src-tauri/src/               后端
@@ -58,21 +70,29 @@ src-tauri/src/               后端
 ├── config/                  AppConfig、原子落盘、vmess:// 解析
 ├── rules/                   解析器、匹配索引、GEOIP、远程订阅
 ├── proxy/                   入站、路由、出站、DNS、统计
-├── vmess/                   AEAD、头部、分块、TCP 传输
+│   ├── socks5_client.rs     连本地 sidecar 的 SOCKS5 客户端（CONNECT / UDP）
+│   ├── udp.rs               UdpOutbound / UdpFlow：直连与 sidecar UDP
+│   └── inbound/udp.rs       SOCKS5 UDP ASSOCIATE 服务端
+├── sidecar/                 v2ray-core 配置生成、启动/就绪/退出、Job Object
+├── vmess/                   原生 AEAD 实现（保留用于参考与 vmess_e2e）
 ├── sysproxy/                系统代理快照/写入/还原、代理环境变量、开机自启
-└── resources/               内置 CN 网段（cn_ipv4.txt / cn_ipv6.txt）
+└── resources/               内置 CN 网段
+
+src-tauri/binaries/          构建时下载的 v2ray.exe（gitignore，不提交）
+src-tauri/resources/         随安装包分发的 v2ray-LICENSE.txt
+src-tauri/tests/sidecar_e2e.rs  真实 v2ray-core 的 legacy TCP + UDP 测试（ignored）
 ```
 
 ## 4. 运行架构
 
 ### 启动时序（`lib.rs`）
 
-1. `AppState::new(app_config_dir)`：加载 `config.json` → 若 `proxy_dirty` 为真则立即还原系统代理 → 编译规则集 → 创建 `RouterHandle`。
+1. `AppState::new(app_config_dir)`：加载 `config.json` → 若 `proxy_dirty` / `env_dirty` 为真则立即还原 → 清理上次残留的 sidecar 配置 → 编译规则集 → 创建 `RouterHandle`。
 2. `app.manage(Arc<AppState>)`。
 3. `setup_tray`：托盘菜单 id 为 `show` / `toggle` / `quit`。
-4. `spawn_traffic`：每秒 `stats.sample()` 并 `emit("nano:traffic")`。
+4. `spawn_traffic`：每秒 `stats.sample()`，把 `stats`、`running` 与 `active.snapshot()` 打包成 `TrafficPayload` 并 `emit("nano:traffic")`。
 5. `spawn_remote_scheduler`：每 60 秒检查一次到期订阅，到期就更新并 `emit` 事件。
-6. `RunEvent::ExitRequested` 时同步调用 `state.restore_system_proxy()`。
+6. `RunEvent::ExitRequested` 时同步调用 `state.restore_all()`；sidecar 由 Job Object 在进程退出时一并结束。
 
 ### 连接生命周期（`proxy/inbound`）
 
@@ -80,27 +100,45 @@ src-tauri/src/               后端
 TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
    → Accepted { Target, preface, kind }
    → RouterHandle.get().decide(target)   // 可能触发 DNS
-   → Policy::Proxy ? VmessOutbound : DirectOutbound
+   → 非 Reject 时 active.begin(...) 返回 RAII guard
+   → Policy::Proxy ? SidecarOutbound : DirectOutbound
    → reply_success()
    → 先写 preface（HTTP 明文请求 / CONNECT 多读的字节）
    → 双向 copy，边转发边累加 TrafficStats
 ```
 
 - HTTP 只支持 `CONNECT host:port` 与绝对 URI（`GET http://host/path`），每连接一个请求，不复用。
-- SOCKS5 只接受 no-auth + CONNECT；UDP ASSOCIATE 回复 `0x07`。
+- SOCKS5 接受 no-auth + `CONNECT` 与 `UDP ASSOCIATE`；节点关闭 UDP 时 `UDP ASSOCIATE` 回复 `0x07`。
+- `UDP ASSOCIATE` 的 TCP 控制连接决定关联生命周期；第一个数据报的源地址会被固定，避免被当作开放 UDP 中继。
+- HTTP 入站不承载 UDP；UDP 只对显式配置 SOCKS5 的程序生效，系统代理不转发 UDP。
 - 拒绝策略返回 HTTP 403 / SOCKS5 `0x02`；上游失败返回 502 / `0x05`。
+- 活动连接由 `proxy/stats.rs` 的 `ActiveConnections` 维护：TCP 每条连接一个 guard，UDP 按
+  `host:port` 去重并在关联结束（guard drop）时移除；拒绝的连接不进入列表。
+
+### v2ray sidecar（`src-tauri/src/sidecar`）
+
+- 所有 VMess 出站都走 sidecar：`AppState::start` 为当前节点生成最小配置，启动
+  `v2ray.exe run -c <config_dir>/v2ray-sidecar.json`，只监听 `127.0.0.1:<随机端口>` 的 SOCKS 入站（`udp: true`）。
+- TCP 用 `proxy/socks5_client.rs` 的 `CONNECT`；UDP 用 `UDP ASSOCIATE` + 一条 `UdpFlow`。
+- `V2raySidecar` 在 `AppState::stop` 时 drop：`Child::kill` + 删除含 UUID 的临时配置。
+- Windows Job Object 设置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，应用崩溃或被强制结束时 sidecar 不会残留。
+- 子进程用 `CREATE_NO_WINDOW` 启动，stdout/stderr 写到 `v2ray-sidecar.log`；启动失败时把日志尾部拼进 `sidecar_error`。
+- 配置里 `alterId > 0` 由 v2ray-core 使用 legacy 请求头；`aes-*-cfb` 映射为 `security: "auto"`（JSON 配置没有 `legacy` 选项）。
+- 入站、规则、统计仍在 Rust 侧，sidecar 只负责 VMess 编解码与 UDP 转发。
 
 ### 规则热替换
 
 `AppState.router` 是 `Arc<RouterHandle>`，内部 `RwLock<Arc<Router>>`；入站持有句柄，每个新连接重新取。
 修改自定义规则、订阅、默认策略、DNS 时调用 `AppState::reload_rules()` 重建 `Router` 并整体替换，
 **已建立的连接不受影响**。路由决策有 120 秒 TTL、上限 1 万条的域名缓存，随 Router 一起丢弃。
+`update_settings` 只在端口 / 局域网 / 系统代理 / 环境变量变化时重启入站；默认策略、DNS、IPv6
+只热替换 Router。前端会先乐观合并设置，再以后端返回的 `ProxyStatus` 与 `nano:rules` 校正。
 
 ### 事件
 
 | 事件 | 负载 | 触发 |
 | --- | --- | --- |
-| `nano:traffic` | `TrafficPayload` | 每秒 |
+| `nano:traffic` | `TrafficPayload { stats, running, active }` | 每秒 |
 | `nano:proxy` | `ProxyStatus` | 启停、设置变更、切换节点 |
 | `nano:rules` | `RulesSummary` | 规则重编译 |
 | `nano:remote` | `RemoteOutcome` | 单个订阅更新完成 |
@@ -113,8 +151,12 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 
 - 位置：`app.path().app_config_dir()`，即 `%APPDATA%\com.nanoshadowrocket.desktop\config.json`。
 - 规则缓存：同目录 `rules/<订阅 id>.conf`。
+- sidecar 临时文件：同目录 `v2ray-sidecar.json`（含 UUID，正常停止即删除）与 `v2ray-sidecar.log`（保留最近一次启动日志）。
 - 写入方式：临时文件 + 原子 rename（`config/store.rs`）；解析失败会把原文件备份成 `config.json.bak` 并回退默认值。
 - 字段全部 `camelCase`（`#[serde(rename_all = "camelCase", default)]`），前端 `lib/types.ts` 必须同步。
+- `NodeEntry.udp` 默认 `true`；旧配置没有该字段时视为允许 UDP，旧链接的 `udp=0` 才会关闭。
+- `Bootstrap` 与 `TrafficPayload` 的 `active` 是 `ActiveConnection[]`（`id/host/port/policy/rule/startedAt/protocol`）；
+  `protocol` 序列化为小写 `tcp` / `udp`。前端 `useAppStore.active` 直接保存该数组，不再有 `recent` 字段。
 
 ### 命令清单
 
@@ -138,6 +180,7 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 | `no_node` / `node_not_found` | 未选节点 / 节点已删除 |
 | `invalid_input` | 参数校验失败（UUID、URL、端口等） |
 | `unsupported_config` | 节点用了未实现的传输或加密 |
+| `sidecar_error` | 内置 v2ray 内核缺失、启动失败、握手失败或提前退出 |
 | `invalid_uuid` / `upstream_unreachable` / `rejected` | 来自 `ProxyError` |
 | `remote_error` / `config_error` / `io_error` / `internal_error` | 订阅、配置、文件、内部错误 |
 
@@ -188,16 +231,19 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 解析结果按 TTL 缓存在 `proxy/dns.rs`。DNS 支持 `system` 与 DoH JSON 端点（`https://...`），
 `ipv6 = false` 时只取 A 记录。
 
-## 7. VMess 实现范围（`src-tauri/src/vmess`）
+## 7. VMess：sidecar 为生产路径
 
-- 仅 **AEAD**（`alterId = 0`）、`net = tcp`、`security = aes-128-gcm | chacha20-poly1305`。
-- `aead.rs`：KDF、cmdKey、authID、两种 AEAD 封装。
-- `header.rs`：请求头明文布局、AEAD 分片、响应头解析；`chunk.rs`：请求/响应分块（≤16KB + tag）。
-- `transport.rs`：TcpStream → 握手 → `VmessStream`（实现 `AsyncRead + AsyncWrite`）。
-- **响应头是惰性的**：`connect()` 只发请求头，不等待响应头；第一次读数据时才校验响应认证。
-  这是与官方 v2ray-core 互通的关键，改动前先跑 `tests/vmess_e2e.rs`。
-- 新增传输（ws / tls / grpc）时的正确做法：在 `outbound.rs` 增加新的 `Outbound` 实现或
-  给 `VmessOutbound` 注入 transport 工厂，**不要**把传输细节写进 `chunk.rs` / `header.rs`。
+- **生产路径**：`AppState::start` 启动 v2ray-core sidecar，所有 VMess 节点（`alterId = 0` 与 `> 0`）都经本地 SOCKS5 出站。
+- `alterId = 0`：v2ray-core 使用 AEAD 请求头；`alterId > 0`：legacy 请求头 + alterId 派生认证。
+- UDP：sidecar 的 SOCKS 入站开启 `udp: true`；NanoShadowrocket 通过 `UDP ASSOCIATE` 转发，节点 `udp = false` 时拒绝。
+- 传输：sidecar 配置目前固定 `network: "tcp"`、`security: "none"`；`Transport::supported()` 只允许 tcp，ws / grpc / TLS 仍未接入。
+- 加密：`CipherMethod::Aes128Gcm | ChaCha20Poly1305` 直接映射；`Legacy`（`aes-128-cfb` / `aes-256-cfb`）映射为 `"auto"`，由 alterId 决定实际头格式。
+- sidecar 配置不写 routing / DNS / sniffing；域名原样交给 v2ray-core，直连 UDP 的域名由 Rust 侧 `Router::resolve` 解析。
+- `src-tauri/src/vmess/` 的原生 AEAD 实现保留：
+  - 用于 `tests/vmess_e2e.rs` 与协议回归；
+  - `AppState` 生产路径不再使用 `VmessOutbound`（单测通过 `native_outbound` 开关保留 start/stop 覆盖）。
+- 原生实现仍只支持 AEAD + TCP；`alterId != 0` 会返回 `unsupported_config`。新增传输不要改 `chunk.rs` / `header.rs`，应扩展 sidecar 配置或新增 `Outbound` 实现。
+- **响应头惰性**是原生实现与官方 v2ray-core 互通的关键；改动 `vmess/transport.rs` 前先跑 `tests/vmess_e2e.rs`。
 
 ## 8. 系统代理与开机自启（`src-tauri/src/sysproxy`）
 
@@ -249,14 +295,29 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
   自定义 rgba 颜色不要再叠加 `/opacity` 修饰符（如 `bg-accent-soft/50` 会得到意料之外的亮度）；
   需要透明度时直接用任意值（`bg-[rgba(...)]` / `bg-white/[0.04]`）。
 - **交互**：所有可点击元素必须是 `<button>`；开关用 `Switch`（role=switch）；表格/列表行高稳定，避免 hover 时布局跳动。
+- **Switch**：轨道用 `inline-flex items-center p-[2px]`，滑块是普通 flex 子项，靠 `translate-x-[18px]` 移动；
+  不要再改成绝对定位 + 静态位置，否则父级 `text-align: center` 会让滑块溢出轨道。
+- **首页顶部卡片**：不再有独立页面标题；大圆按钮就是连接状态，节点名后面紧跟可复制的本地地址，
+  运行时长胶囊与节点名同一行、靠右。不要把状态标题或地址重复塞回页面头部。
+- **活动连接**：`lib/active.ts` 用常见多级后缀启发式求主域名（完整 PSL 不引入）；分组策略取子项最高优先级
+  （proxy → direct → reject），同组内按连接数、域名排序。`ActiveConnections` 同时只允许一个主域名展开。
+  展开行的端口、协议、策略要紧跟在主机名后面，右侧只放一键规则按钮。
+- **一键规则**：主域名用 `DOMAIN-SUFFIX`，具体主机用 `DOMAIN`，IP 用 `IP-CIDR`（v4 `/32`、v6 `/128`）；
+  写入走 `useRuleStore.applyQuickRule`，按 `kind + value` upsert 到列表最前并立即保存。
+- **自定义规则表单**：`lib/customRules.ts` 负责文本 ↔ 表单模型；注释在重写时丢弃，无法识别的原始行放入
+  `unsupported` 并在保存时原样保留。新增规则与一键规则 upsert 到顶部，编辑保持原位置。
+- **节点字段**：`Node` / `NodeInput` 都有 `udp: boolean`，`NodeSheet` 用 `Switch` 控制；`Security` 额外包含 `"legacy"`，对应旧链接的 `aes-*-cfb`。
 - **响应式**：断点用 `max-[860px]:`（窗口最窄 780px），主卡在窄窗口改为纵向堆叠。
 
 ## 10. 测试
 
 - 单测跟模块放在一起（`#[cfg(test)] mod tests`），覆盖：规则解析/匹配、VMess AEAD 与分块、
-  `vmess://` 解析、配置往返、错误码、SOCKS5 握手、HTTP 头解析、统计速率。
+  `vmess://` 解析、配置往返、错误码、SOCKS5 握手、UDP 包编解码、sidecar 配置生成、HTTP 头解析、统计速率、
+  活动连接的 guard 自动移除与清空、默认策略热替换。
 - `tests/vmess_e2e.rs` 需要真实 v2ray-core（`127.0.0.1:10086`）与 `python -m http.server 18080`，
   默认 `#[ignore]`。注意 `#[ignore = "..."]` 的值必须是**字面量**，不能用常量。
+- `tests/sidecar_e2e.rs` 自行拉起本地 v2ray-core 服务端，验证 `alterId = 0` AEAD、`alterId = 64` legacy TCP、
+  SOCKS5 UDP ASSOCIATE，以及完整 `AppState` 入站链路；需要先 `bun run prepare:sidecar`，默认 `#[ignore]`。
 - `tests/rules_real.rs` 需要访问 GitHub Pages，默认 `#[ignore]`，用于验证大订阅与真实规则集：
   `cargo test --test rules_real -- --ignored --nocapture`。
 - 提交前至少跑：
@@ -274,16 +335,61 @@ cd src-tauri && cargo fmt && cargo clippy --lib --tests && cargo test --lib
   把 `src-tauri/target` 加入 Windows Defender 排除项可显著提速。
 - 产物：`src-tauri/target/release/nano-shadowrocket.exe`、
   `src-tauri/target/release/bundle/nsis/NanoShadowrocket_<version>_x64-setup.exe`。
-- 发版前同步版本号：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、
-  `TitleBar.tsx` 里的 `v0.1.0`。
+- sidecar 通过 `tauri.conf.json` 的 `bundle.externalBin: ["binaries/v2ray"]` 打进安装包；
+  源码文件名必须是 `src-tauri/binaries/v2ray-x86_64-pc-windows-msvc.exe`，安装后位于主程序同目录的 `v2ray.exe`。
+- `scripts/fetch-v2ray.mjs` 固定 v2ray-core `v5.53.0`，同时校验 zip 与 exe 的 SHA256；
+  `beforeDevCommand` / `beforeBuildCommand` 会自动执行 `bun run prepare:sidecar`。
+- 安装包因此增加约 15-20MB（压缩后）；`v2ray.exe` 本身约 40MB，不提交仓库。
 - 应用标识符 `com.nanoshadowrocket.desktop` 一经发布不要改，否则配置目录与升级链会断。
+
+### 版本号体系
+
+- **唯一来源是 git tag**（`vX.Y.Z`），不要手改任何一处版本号。
+- 三处清单文件与 `Cargo.lock` 中的本包版本由 `scripts/set-version.mjs` 同步：
+  `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.lock`。
+  `TitleBar.tsx` 不再硬编码，改为运行时读 `getVersion()`。
+- `bun scripts/set-version.mjs 0.2.0` 写入；`--check` 只校验，不一致时退出 1。
+  不带版本号时以 `package.json` 为基准，CI 用这个模式检查三处清单与 `Cargo.lock` 是否同步。
+- 新增需要记录版本号的地方时，**不要**再写死字符串。
+
+### GitHub Actions（`.github/workflows`）
+
+| 工作流 | 触发 | 作用 |
+| --- | --- | --- |
+| `ci.yml` | push main / PR | 版本号一致性、前端构建、`cargo fmt --check`、`clippy -D warnings`、`cargo test --lib` |
+| `release.yml` | `release: published` / 手动 `workflow_dispatch` | 安装依赖 → 下载 sidecar → 按 tag 同步版本号 → 打包上传 → 校验 `latest.json` → 补充 Release 说明 → 发布 draft |
+| `bump.yml` | 手动 `workflow_dispatch` | 选 patch/minor/major → 算版本 → 提交打 tag → 建 draft Release → 显式 dispatch `release.yml` |
+
+- **不要依赖 `GITHUB_TOKEN` 创建的 Release 去触发 `release` 事件**：GitHub 不会为它启动新工作流。
+  `bump.yml` 因此使用 `workflow_dispatch`（该事件允许被 `GITHUB_TOKEN` 触发），并需要 `actions: write`。
+- Release 先以 draft 创建，资产校验通过后才发布；这样构建期间 `releases/latest` 仍指向上一个完整版本。
+- 打包用 `tauri-apps/tauri-action@v0`，`releaseId` 指向已存在的 Release，`includeUpdaterJson: true` 生成 `latest.json`；
+  `updaterJsonPreferNsis: true` 确保 Windows 更新指向 NSIS 的 `setup.exe`。
+- `latest.json` 的 `platforms["windows-x86_64"]` 指向 `setup.exe` 资产本身（不是 zip），
+  客户端 `tauri-plugin-updater` 能直接识别 exe 并以 NSIS 参数运行。
+- 发布流程的细节与故障排查见 [RELEASE.md](RELEASE.md)。
+
+### 应用内更新
+
+- 依赖 `tauri-plugin-updater`；`tauri.conf.json` 里 `bundle.createUpdaterArtifacts: true`
+  与 `plugins.updater.{ pubkey, endpoints }`。`pubkey` 是 minisign 公钥，随应用分发。
+- endpoint 固定为 `https://github.com/Gort-Li/NanoShadowrocket/releases/latest/download/latest.json`。
+- 前端逻辑在 `src/lib/update.ts`（check / download / install），状态在 `useAppStore` 的 `update` 字段，
+  UI 在设置页的「关于」组。启动 6 秒后静默检查一次。
+- Windows 上 NSIS 安装器会替换 exe 并自行重启应用，**不需要** `tauri-plugin-process` 的 `relaunch`。
+- 先下载更新包，下载完成后再 `stop_proxy` 并安装；避免下载失败时把用户断网，也避免安装器替换 exe 时端口仍被占用。
+- 私钥只存在于 GitHub Secret 与本地 `~/.tauri/`，**禁止**进仓库；丢了就发不了更新。
 
 ### 截图更新
 
 ```bash
 bun run dev
-# 另开终端，用 Playwright/无头 Chromium 按 900x760（规则页 900x880）截图
-# 覆盖 docs/screenshots/{home,nodes,rules,settings,node-form,rule-test}.png
+# 另开终端，用 Playwright/无头 Chromium 截图（deviceScaleFactor: 2）
+# 首页 900x1000（要完整展示活动连接树），节点页 900x760
+# 规则页 900x880，设置页 900x900（内容更长）
+# 规则表单截图在规则页打开「添加规则」抽屉后按 900x880 截
+# 规则测试页 900x1200（表单 + 订阅 + 测试结果完整展示）
+# 覆盖 docs/screenshots/{home,nodes,rules,settings,node-form,rule-form,rule-test}.png
 ```
 
 截图依赖 `lib/mock.ts` 的演示数据；修改演示节点或订阅后记得同步重截。
@@ -294,7 +400,7 @@ bun run dev
 
 1. `rules/parser.rs`：加 `RuleKind` 分支、解析与校验、`label()`/`value()`。
 2. `rules/matcher.rs`：建索引、加入 `decide_domain` / `decide_ip` 的候选比较与 `needs_resolve` 判断。
-3. `RuleEditor.tsx` 的高亮规则（如需要）。
+3. `lib/customRules.ts` 的 `CustomRuleKind` / 解析 / 校验 / 序列化，以及 `RuleSheet.tsx` 的 `KINDS` 选项。
 4. 补解析与匹配单测。
 
 **新增一个命令**
@@ -310,8 +416,16 @@ bun run dev
 
 **换/加出站类型**
 
-实现 `proxy::Outbound`（`async fn connect(&self, &Target) -> Result<BoxedStream>`），
-在 `AppState::start` 里按配置选择，路由与 UI 不需要改。
+TCP 实现 `proxy::Outbound`（`async fn connect(&self, &Target) -> Result<BoxedStream>`）；
+UDP 实现 `proxy::udp::UdpOutbound` + `UdpFlow`。在 `AppState::start` 里按配置选择，路由与 UI 不需要改。
+VMess 的协议差异优先通过 sidecar 配置解决，不要把新传输写进 `vmess/chunk.rs`。
+
+**新增 VMess 传输（ws / tls / grpc）**
+
+1. `config/model.rs` 的 `Transport::supported()` 放开对应枚举。
+2. `sidecar/config.rs` 补 `streamSettings`（path、host、TLS 证书等）；节点模型需要新增字段时同步 `NodeInput` 与前端表单。
+3. `commands/nodes.rs` 的导入警告与校验同步。
+4. 补 sidecar 配置单测，并用真实服务端跑 `tests/sidecar_e2e.rs`。
 
 ## 13. 已知陷阱
 
@@ -325,6 +439,19 @@ bun run dev
 - **`Policy` 的序列化是小写**（`proxy/direct/reject`），前端 `POLICY_LABEL` 依赖这个。
 - **端口 0**：测试里用 `listen_port = 0` 让系统分配，`ProxyStatus.local_port` 返回实际端口。
 - **不要打印 UUID**：`sanitize` 只用于订阅 URL；节点相关日志只写名称与 `host:port`。
+  sidecar 配置文件含 UUID，属于必要文件，正常停止会删除；不要把它的内容写进日志或错误文案。
+- **sidecar 路径**：运行时只找主程序同目录的 `v2ray.exe`；开发态回退到
+  `src-tauri/binaries/v2ray-x86_64-pc-windows-msvc.exe`。打包缺文件会直接报 `sidecar_error`。
+- **UDP 只走 SOCKS5**：系统代理（WinINET）不承载 UDP；HTTP 入站也没有 UDP。
+- **sidecar 生命周期**：必须依赖 `V2raySidecar` 的 `Drop` 或 Job Object，不要在命令层直接 `Child::kill`；
+  否则含 UUID 的临时配置可能残留。
+- **测试开关**：`AppState.native_outbound` 只在 `#[cfg(test)]` 下存在，生产路径不能被它绕过。
+- **活动连接 guard**：`ActiveConnections::begin` 返回的 guard 必须在连接/关联任务里活到结束，不要 `let _ = ...`
+  立即丢弃；UDP 用 `HashMap<String, ConnectionGuard>` 按目标去重，关联结束统一 drop。
+- **一键规则顺序**：`applyQuickRule` 必须 upsert 到自定义规则最前，否则会被更宽的旧规则抢先命中；
+  不要改成追加到末尾。
+- **表单与原始规则**：`parseCustomRules` 会丢弃注释，但必须把 `unsupported` 原样写回；不要为了“清理”
+  把无法识别的行删掉，否则用户会静默丢规则。
 
 ## 14. 代码风格
 

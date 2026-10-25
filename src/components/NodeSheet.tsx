@@ -6,9 +6,10 @@ import type { AddNodeResult, Node, NodeInput, Security, Transport } from "../lib
 import { useAppStore } from "../store/useAppStore";
 import Button from "./Button";
 import Sheet from "./Sheet";
+import Switch from "./Switch";
 
 const TRANSPORTS: Transport[] = ["tcp", "ws", "grpc", "h2", "quic", "kcp", "http"];
-const SECURITIES: Security[] = ["aes-128-gcm", "chacha20-poly1305"];
+const SECURITIES: Security[] = ["aes-128-gcm", "chacha20-poly1305", "legacy"];
 
 function blank(): NodeInput {
   return {
@@ -20,6 +21,7 @@ function blank(): NodeInput {
     alterId: 0,
     security: "aes-128-gcm",
     transport: "tcp",
+    udp: true,
   };
 }
 
@@ -33,6 +35,7 @@ function toInput(node: Node): NodeInput {
     alterId: node.alterId,
     security: node.security,
     transport: node.transport,
+    udp: node.udp,
   };
 }
 
@@ -224,6 +227,9 @@ export default function NodeSheet({
                   alterId {preview.node.alterId}
                 </span>
                 <span className="rounded-md bg-white/[0.04] px-1.5 py-[1px]">
+                  UDP {preview.node.udp ? "开" : "关"}
+                </span>
+                <span className="rounded-md bg-white/[0.04] px-1.5 py-[1px]">
                   UUID {preview.node.uuid.slice(0, 8)}…
                 </span>
               </div>
@@ -303,7 +309,7 @@ export default function NodeSheet({
               </Field>
             </div>
             <div className="w-[112px] shrink-0">
-              <Field label="alterId">
+              <Field label="alterId" hint="0 = AEAD，>0 = 旧版 VMess">
                 <input
                   className="field font-mono"
                   type="number"
@@ -330,10 +336,24 @@ export default function NodeSheet({
             </select>
           </Field>
 
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-hairline bg-white/[0.03] px-3 py-2.5">
+            <div className="min-w-0">
+              <span className="field-label">UDP 转发</span>
+              <p className="mt-0.5 text-[10px] leading-4 text-ink-faint">
+                仅对显式走 SOCKS5 的程序生效；系统代理本身不承载 UDP
+              </p>
+            </div>
+            <Switch
+              checked={form.udp}
+              onChange={(next) => update("udp", next)}
+              label="UDP 转发"
+            />
+          </div>
+
           {form.transport !== "tcp" && (
             <div className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[11px] leading-5 text-warn">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-              当前版本只实现了 TCP 传输，保存为 {form.transport} 后连接会失败。
+              当前版本只实现了 TCP 传输，保存为 {form.transport} 会被拒绝。
             </div>
           )}
         </div>

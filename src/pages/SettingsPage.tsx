@@ -1,4 +1,15 @@
-import { Database, Globe2, Network, RotateCcw, Save, Shield, Wifi } from "lucide-react";
+import {
+  Database,
+  Download,
+  Globe2,
+  Info,
+  Network,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Shield,
+  Wifi,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import Button from "../components/Button";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -6,6 +17,7 @@ import PageHeader from "../components/PageHeader";
 import SettingRow from "../components/SettingRow";
 import Switch from "../components/Switch";
 import { POLICY_LABEL } from "../lib/format";
+import { appVersion } from "../lib/tauri";
 import type { AppConfig, Policy, SettingsInput } from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
 
@@ -84,11 +96,19 @@ export default function SettingsPage() {
   const saveSettings = useAppStore((s) => s.saveSettings);
   const clearRuleCache = useAppStore((s) => s.clearRuleCache);
   const resetConfig = useAppStore((s) => s.resetConfig);
+  const updateState = useAppStore((s) => s.update);
+  const checkUpdate = useAppStore((s) => s.checkUpdate);
+  const installUpdate = useAppStore((s) => s.installUpdate);
 
   const [draft, setDraft] = useState<SettingsInput | null>(null);
   const [confirmCache, setConfirmCache] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [customDns, setCustomDns] = useState(false);
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    void appVersion().then(setVersion);
+  }, []);
 
   useEffect(() => {
     if (!config) return;
@@ -282,6 +302,60 @@ export default function SettingsPage() {
               <RotateCcw size={11} /> 重置
             </span>
           </SettingRow>
+        </Group>
+
+        <Group icon={<Info size={13} />} title="关于">
+          <SettingRow
+            label="当前版本"
+            description="安装包由 minisign 签名校验，更新源为 GitHub Releases"
+          >
+            <span className="font-mono text-[11px] text-ink-muted">
+              {version ? `v${version}` : "…"}
+            </span>
+          </SettingRow>
+          <SettingRow
+            label="软件更新"
+            description={
+              updateState.installing
+                ? updateState.progress >= 100
+                  ? "安装包已下载，正在启动安装程序…"
+                  : `正在下载安装包… ${updateState.progress}%`
+                : updateState.available
+                  ? `可更新到 v${updateState.available.version}，安装完成后会自动重启`
+                  : updateState.checking
+                    ? "正在检查…"
+                    : (updateState.error ?? "检查更新只读取 latest.json，需要联网")
+            }
+          >
+            {updateState.available ? (
+              <Button
+                variant="primary"
+                icon={<Download size={13} />}
+                loading={updateState.installing}
+                onClick={() => void installUpdate()}
+              >
+                立即更新
+              </Button>
+            ) : (
+              <Button
+                icon={<RefreshCw size={13} />}
+                loading={updateState.checking}
+                onClick={() => void checkUpdate()}
+              >
+                检查
+              </Button>
+            )}
+          </SettingRow>
+          {updateState.installing && (
+            <div className="px-4 py-3">
+              <div className="h-1 overflow-hidden rounded-full bg-white/[0.06]">
+                <div
+                  className="h-full rounded-full bg-accent transition-[width] duration-300"
+                  style={{ width: `${Math.max(4, updateState.progress)}%` }}
+                />
+              </div>
+            </div>
+          )}
         </Group>
 
         <div className="flex items-start gap-2 rounded-xl border border-hairline bg-white/[0.02] px-3.5 py-3 text-[11px] leading-5 text-ink-faint">

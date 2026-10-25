@@ -44,7 +44,7 @@ pub async fn get_traffic(state: State<'_, Arc<AppState>>) -> Result<TrafficPaylo
     Ok(TrafficPayload {
         stats: state.stats.snapshot(),
         running: state.status().await.running,
-        recent: state.log.snapshot(),
+        active: state.active.snapshot(),
     })
 }
 
@@ -102,8 +102,16 @@ pub async fn update_settings(
             .map_err(AppError::Internal)?;
     }
 
+    let current = state.config.snapshot();
     let was_running = state.status().await.running;
-    if was_running {
+    // 只有会影响监听或宿主集成的设置才需要重启入站；默认策略 / DNS / IPv6
+    // 只需热替换 Router，避免白白断开已有连接。
+    let needs_restart = was_running
+        && (input.listen_port != current.listen_port
+            || input.allow_lan != current.allow_lan
+            || input.system_proxy != current.system_proxy
+            || input.proxy_env != current.proxy_env);
+    if needs_restart {
         state.stop().await?;
     }
 
@@ -119,7 +127,7 @@ pub async fn update_settings(
     })?;
     state.reload_rules();
 
-    let status = if was_running {
+    let status = if needs_restart {
         state.start().await?
     } else {
         state.status().await

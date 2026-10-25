@@ -10,3 +10,11 @@ dist-ssr
 # Rust / Tauri
 src-tauri/target
 src-tauri/gen/schemas
+
+# 构建时下载的 v2ray-core sidecar
+src-tauri/binaries/v2ray-*
+src-tauri/binaries/.v2ray-*
+
+# 本地 IDE / 计划文件，不进仓库
+.codebuddy
+*.tsbuildinfo

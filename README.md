@@ -4,7 +4,7 @@
 
 **极轻量的 Windows 代理客户端，交互与视觉对标 Shadowrocket。**
 
-一个 3MB 的安装包，没有驱动、没有 TUN、没有后台服务，双击就能让流量按规则走。
+没有驱动、没有 TUN、没有后台服务；VMess 由随安装包分发的 v2ray-core sidecar 处理，双击就能让流量按规则走。
 
 ![Tauri](https://img.shields.io/badge/Tauri-2.12-24C8DB?logo=tauri&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-1.90+-DEA584?logo=rust&logoColor=white)
@@ -19,15 +19,19 @@
 
 ## 特性
 
-- **一键接管**：开启后监听 `127.0.0.1:8888`，同一个端口同时兼容 HTTP 代理与 SOCKS5。
+- **一键接管**：开启后监听 `127.0.0.1:8888`，同一个端口同时兼容 HTTP 代理与 SOCKS5；首页卡片里的本地地址可一键复制。
 - **系统代理托管**：开启时写入 Windows 代理设置，关闭或退出自动还原；异常退出留下的残留会在下次启动时修复。
 - **命令行也能走**：可选的 `HTTP_PROXY` / `HTTPS_PROXY` 用户环境变量托管，让 `curl`、`git`、`npm` 这类不读系统代理的工具一并生效；关闭或卸载时按原值还原。
-- **VMess 节点**：粘贴 `vmess://` 链接即可导入，支持 aes-128-gcm / chacha20-poly1305；节点可编辑、删除、单独测速或批量测速。
+- **VMess 节点**：粘贴 `vmess://` 链接即可导入，支持 AEAD（`alterId = 0`）与旧版 `alterId > 0`，以及 SOCKS5 UDP 转发；节点可编辑、删除、单独测速或批量测速。
 - **Shadowrocket 规则**：解析 `.conf` 的 `DOMAIN` / `DOMAIN-SUFFIX` / `DOMAIN-KEYWORD` / `IP-CIDR` / `GEOIP` / `FINAL`，策略支持 Proxy、Direct、Reject。
+- **可视化规则编辑**：规则页用表单添加、编辑、删除和排序自定义规则；无法识别的原始行会保留并提示，不会静默丢失。
+- **活动连接树**：首页按主域名聚合当前 TCP / UDP 链接，代理在前、直连在后；展开后端口、协议与策略紧跟在链接后面。点击活动连接卡片滚动到列表，主域名默认折叠且同时只展开一个。
+- **一键规则**：活动链接的主域名和具体链接右侧都有代理 / 直连 / 拒绝按钮，写入自定义规则最前面并立即生效。
 - **优先级可控**：自定义规则永远第一，远程订阅按拖动顺序依次匹配，最后是默认策略。
 - **订阅自动更新**：多条规则 URL，6 / 12 / 24 / 48 小时或手动；带 ETag 条件请求，没变化不会重复下载。
 - **规则测试器**：输入域名就知道命中哪条规则、来自哪个订阅的第几行、最终走代理还是直连。
 - **托盘常驻**：关闭窗口只是隐藏，托盘菜单可以直接开关代理。
+- **应用内更新**：设置页 → 关于 → 软件更新，可检查新版本并直接下载安装，签名校验通过后自动重启。
 
 ## 截图
 
@@ -35,9 +39,11 @@
 | --- | --- |
 | ![节点](docs/screenshots/nodes.png) | ![规则](docs/screenshots/rules.png) |
 
-| 新增 / 编辑节点 | 规则测试 |
+| 新增 / 编辑节点 | 自定义规则表单 |
 | --- | --- |
-| ![节点编辑](docs/screenshots/node-form.png) | ![规则测试](docs/screenshots/rule-test.png) |
+| ![节点编辑](docs/screenshots/node-form.png) | ![规则表单](docs/screenshots/rule-form.png) |
+
+![规则测试](docs/screenshots/rule-test.png)
 
 ![设置](docs/screenshots/settings.png)
 
@@ -45,9 +51,11 @@
 
 ### 下载安装包
 
-到 [Releases](../../releases) 下载 `NanoShadowrocket_x.y.z_x64-setup.exe`，双击安装即可。
+到 [Releases](https://github.com/Gort-Li/NanoShadowrocket/releases) 下载 `NanoShadowrocket_x.y.z_x64-setup.exe`，双击安装即可。
 
 系统要求：Windows 10 / 11 x64，自带 WebView2（若精简系统缺失，可从微软官网安装 Evergreen Runtime）。
+
+装好后不用再手动下载新版本：设置页的「关于 → 软件更新」会检查 GitHub Releases，有新版时可以直接下载安装。
 
 ### 从源码构建
 
@@ -59,6 +67,9 @@ bun run tauri:build
 ```
 
 安装包输出在 `src-tauri/target/release/bundle/nsis/`。首次编译约 8-10 分钟，之后增量打包约 1-2 分钟。
+构建前会自动运行 `bun run prepare:sidecar`，下载并校验 v2ray-core `v5.53.0`（约 19MB 压缩包）；安装包因此比早期版本大约 15-20MB。
+
+> 打包会同时产出应用内更新用的签名包，因此需要先设置签名密钥 `TAURI_SIGNING_PRIVATE_KEY`（见 [RELEASE.md](RELEASE.md)）；只跑 `bun run tauri:dev` 做日常开发则不需要。
 
 ## 快速开始
 
@@ -66,10 +77,12 @@ bun run tauri:build
 
 打开左侧「节点」页，点击右上角 **新增节点**：
 
-- **粘贴链接**：把 `vmess://...` 整段粘进输入框，400ms 后出现解析预览（名称、地址、端口、加密方式）。确认无误后点 **保存节点**。
-- **手动填写**：切到「手动填写」，填写地址、端口、UUID、alterId、加密方式与传输方式。
+- **粘贴链接**：把 `vmess://...` 整段粘进输入框，400ms 后出现解析预览（名称、地址、端口、加密方式、alterId、UDP）。旧版 Shadowrocket 链接里的 `alterId=64&udp=1` 会被正确识别。确认无误后点 **保存节点**。
+- **手动填写**：切到「手动填写」，填写地址、端口、UUID、alterId、加密方式与传输方式；「UDP 转发」开关默认开启。
 
-> 传输方式目前只实现了 `tcp`。选择 `ws` / `grpc` 会看到黄色提示，保存后无法连接。
+> 传输方式目前只实现了 `tcp`。选择 `ws` / `grpc` 会看到黄色提示，保存时会被拒绝。
+>
+> UDP 只对显式配置了 SOCKS5 代理的程序生效（例如部分下载器、游戏客户端）；Windows 系统代理本身只转发 TCP，不会自动让所有程序获得 UDP 能力。
 
 ### 2. 选择节点
 
@@ -79,9 +92,11 @@ bun run tauri:build
 
 不加任何规则也能用：所有流量走代理，内网与本机地址自动直连。
 
-- **自定义规则**：在「规则」页顶部的编辑区直接写，例如 `DOMAIN-SUFFIX,github.com,Proxy`。语法与 Shadowrocket 一致，保存后立即生效，并且永远优先于订阅。
+- **自定义规则**：在「规则」页点击 **添加规则**，选择类型（域名后缀 / 精确域名 / 关键词 / IP 网段 / GEOIP / FINAL），填写内容与策略后加入列表；支持编辑、删除和上下移动。新规则会放在最前面，点击页面右上角的 **保存** 后生效，并且永远优先于订阅。
+- **一键规则**：首页「当前活动链接」的主域名和具体链接右侧都有代理 / 直连 / 拒绝按钮，点击后会写入自定义规则最前面并立即保存；主域名使用 `DOMAIN-SUFFIX`，具体链接使用 `DOMAIN`，IP 目标使用 `IP-CIDR`。
 - **远程订阅**：点击 **添加订阅**，粘贴一个 `.conf` 地址（例如 Johnshall 的分流规则合集），选择更新间隔。下载成功后会显示规则条数与更新时间。
 - **调整顺序**：拖动订阅卡片左侧的 `⋮⋮` 手柄，越靠上的订阅优先级越高。
+- 表单不保留注释；无法识别的原始行会原样保留，并在自定义规则上方提示。
 
 ### 4. 开启代理
 
@@ -94,7 +109,8 @@ bun run tauri:build
 ### 5. 验证是否生效
 
 - 首页的「实时流量」出现上下行曲线，说明有流量经过；
-- 「最近连接」会列出域名与命中的策略（蓝=代理、灰=直连、红=拒绝）；
+- 首页「当前活动链接」按主域名聚合正在进行的 TCP / UDP 链接（蓝=代理、灰=直连、红=拒绝），点击主域名展开子链接，同一时间只展开一个；点击上方「活动连接」卡片会自动滚动到列表；
+- 列表每一行右侧的 **代理 / 直连 / 拒绝** 按钮可直接写入自定义规则：主域名使用 `DOMAIN-SUFFIX`，具体链接使用 `DOMAIN`，IP 目标使用 `IP-CIDR`，写入后立即保存；
 - 在「规则」页底部输入 `api.github.com` 回车，可以直接看到命中的规则与最终走向。
 
 ### 6. 关闭与退出
@@ -162,9 +178,13 @@ FINAL,Proxy
 
 规则地址需要能直接访问到 `.conf` 文本（GitHub Raw 链接在国内可能超时）。错误原因会显示在订阅卡片上，修好网络后点该卡的刷新按钮重试。
 
+**支持旧版 alterId / UDP 吗？**
+
+支持。所有 VMess 节点都通过内置的 v2ray-core sidecar 出站：`alterId = 0` 使用 AEAD，`alterId > 0` 使用旧版 VMess 请求头；SOCKS5 `UDP ASSOCIATE` 会按节点上的「UDP 转发」开关放行。旧链接里的 `aes-128-cfb` / `aes-256-cfb` 会显示为 `legacy`；v2ray-core 的 JSON 配置没有单独的 CFB 选项，客户端会按 `auto` 选择 AES-GCM / ChaCha20-Poly1305 作为 body 加密，服务端按请求头里的安全类型解密。
+
 **支持 ws / tls / grpc 节点吗？**
 
-暂不支持，当前只实现了 VMess AEAD + TCP。导入时会明确提示，不会静默失败。
+暂不支持，当前只开放 VMess + TCP。导入时会明确提示，不会静默失败。v2ray-core 本身具备这些能力，后续会在节点模型与 sidecar 配置里补齐。
 
 **配置存在哪？怎么彻底重置？**
 
@@ -180,4 +200,4 @@ FINAL,Proxy
 
 ## 许可证
 
-[MIT](LICENSE)
+[MIT](LICENSE)。安装包内含未修改的 [v2ray-core](https://github.com/v2fly/v2ray-core) v5.53.0，按其 MIT 许可证分发，完整声明见 `src-tauri/resources/v2ray-LICENSE.txt`。

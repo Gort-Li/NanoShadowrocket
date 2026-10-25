@@ -64,6 +64,9 @@ pub struct NodeEntry {
     pub transport: Transport,
     #[serde(flatten)]
     pub config: VmessConfig,
+    /// 是否允许 SOCKS5 UDP 转发。旧链接的 `udp=1` 会置为 true。
+    #[serde(default = "default_true")]
+    pub udp: bool,
     /// 最近一次延迟测试结果（毫秒），`None` 表示未测。
     #[serde(default)]
     pub latency_ms: Option<u32>,
@@ -76,6 +79,7 @@ impl NodeEntry {
             name: name.into(),
             transport: Transport::Tcp,
             config,
+            udp: true,
             latency_ms: None,
         }
     }

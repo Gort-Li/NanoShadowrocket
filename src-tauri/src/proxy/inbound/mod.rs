@@ -17,21 +17,25 @@ use tokio::task::JoinHandle;
 
 use super::outbound::{BoxedStream, Outbound};
 use super::router::RouterHandle;
-use super::stats::{ConnectionEntry, ConnectionLog, TrafficStats};
+use super::stats::{ActiveConnections, ConnectionProtocol, TrafficStats};
 use super::target::Target;
 use crate::error::{bind_error, AppError};
 use crate::rules::Policy;
 
 mod http;
 mod socks5;
+mod udp;
 
 /// 入站依赖。启动后不可变，规则热更新通过替换 [`Router`] 实现。
 pub struct InboundDeps {
     pub router: Arc<RouterHandle>,
     pub proxy: Arc<dyn Outbound>,
     pub direct: Arc<dyn Outbound>,
+    pub proxy_udp: Arc<dyn super::udp::UdpOutbound>,
+    pub direct_udp: Arc<dyn super::udp::UdpOutbound>,
+    pub udp_enabled: bool,
     pub stats: Arc<TrafficStats>,
-    pub log: Arc<ConnectionLog>,
+    pub active: Arc<ActiveConnections>,
 }
 
 enum ClientKind {
@@ -108,12 +112,12 @@ pub async fn start(bind: SocketAddr, deps: InboundDeps) -> Result<InboundHandle,
 
 async fn handle(mut client: TcpStream, peer: SocketAddr, deps: Arc<InboundDeps>) {
     let _active = deps.stats.enter();
-    if let Err(err) = serve(&mut client, &deps).await {
+    if let Err(err) = serve(&mut client, peer, &deps).await {
         log::debug!("来自 {peer} 的连接结束：{err}");
     }
 }
 
-async fn serve(client: &mut TcpStream, deps: &InboundDeps) -> Result<(), String> {
+async fn serve(client: &mut TcpStream, peer: SocketAddr, deps: &InboundDeps) -> Result<(), String> {
     let mut first = [0u8; 1];
     let n = client.peek(&mut first).await.map_err(|e| e.to_string())?;
     if n == 0 {
@@ -121,14 +125,24 @@ async fn serve(client: &mut TcpStream, deps: &InboundDeps) -> Result<(), String>
     }
 
     let accepted = if first[0] == 0x05 {
-        let target = match socks5::handshake(client).await {
-            Ok(target) => target,
+        let request = match socks5::handshake(client).await {
+            Ok(request) => request,
             Err(err) => {
                 if let Some(code) = err.reply {
                     let _ = socks5::reply(client, code).await;
                 }
                 log::debug!("SOCKS5 握手失败：{err}");
                 return Err(err.to_string());
+            }
+        };
+        let target = match request {
+            socks5::Request::Connect(target) => target,
+            socks5::Request::UdpAssociate { .. } => {
+                if !deps.udp_enabled {
+                    let _ = socks5::reply(client, 0x07).await;
+                    return Ok(());
+                }
+                return udp::serve(client, peer, deps).await;
             }
         };
         Accepted {
@@ -156,18 +170,20 @@ async fn serve(client: &mut TcpStream, deps: &InboundDeps) -> Result<(), String>
     };
 
     let decision = deps.router.get().decide(&accepted.target).await;
-    deps.log.push(ConnectionEntry {
-        host: accepted.target.host(),
-        port: accepted.target.port(),
-        policy: decision.policy,
-        rule: decision.rule.clone(),
-        at: crate::rules::now_secs(),
-    });
 
     if decision.is_reject() {
         reply_error(client, accepted.kind, ReplyKind::Rejected).await;
         return Ok(());
     }
+
+    // guard 一直活到 serve 结束；连接失败 / 客户端断开都会自动移除。
+    let _connection = deps.active.begin(
+        accepted.target.host(),
+        accepted.target.port(),
+        decision.policy,
+        decision.rule.clone(),
+        ConnectionProtocol::Tcp,
+    );
 
     let outbound = match decision.policy {
         Policy::Proxy => &deps.proxy,

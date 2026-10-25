@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Copy, Minus, Square, X } from "lucide-react";
 import { cn } from "../lib/cn";
 import {
+  appVersion,
   closeWindow,
   isTauri,
   minimizeWindow,
@@ -40,6 +41,11 @@ function ControlButton({
 
 export default function TitleBar() {
   const [maximized, setMaximized] = useState(false);
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    void appVersion().then(setVersion);
+  }, []);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -76,7 +82,7 @@ export default function TitleBar() {
           Nano Shadowrocket
         </span>
         <span className="ml-1 rounded-full border border-hairline bg-white/[0.04] px-1.5 py-[1px] text-[9px] font-medium text-ink-faint">
-          v0.1.0
+          {version ? `v${version}` : "…"}
         </span>
       </div>
 

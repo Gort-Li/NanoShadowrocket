@@ -20,7 +20,7 @@ export default function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-[26px] w-[44px] shrink-0 rounded-full border transition-colors duration-200",
+        "relative inline-flex h-[26px] w-[44px] shrink-0 items-center rounded-full border p-[2px] transition-colors duration-200",
         checked
           ? "border-accent/40 bg-accent shadow-[0_0_16px_rgba(10,132,255,0.35)]"
           : "border-white/10 bg-white/[0.08]",
@@ -29,9 +29,9 @@ export default function Switch({
     >
       <span
         className={cn(
-          "absolute top-[2px] h-[20px] w-[20px] rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.45)]",
-          "transition-[transform,width] duration-200 ease-spring",
-          checked ? "translate-x-[20px]" : "translate-x-[2px]"
+          "h-[20px] w-[20px] rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.45)]",
+          "transition-transform duration-200 ease-spring",
+          checked ? "translate-x-[18px]" : "translate-x-0"
         )}
       />
     </button>

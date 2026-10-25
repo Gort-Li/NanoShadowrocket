@@ -1,0 +1,91 @@
+name: Bump Version
+
+# 手动发版入口：选一个递增级别，自动算出下一个版本号、
+# 同步三处清单文件、提交、打 tag、创建 draft Release，并显式触发 Release 工作流构建。
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: 递增级别
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      dry_run:
+        description: 只计算版本号，不提交不发布
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  # 用 GITHUB_TOKEN 创建 Release 不会触发 release 事件，需要显式 dispatch
+  # release.yml；workflow_dispatch 是 GitHub 允许由 GITHUB_TOKEN 触发的例外。
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: 计算下一个版本号
+        id: bump
+        run: |
+          set -euo pipefail
+          # 基数取「package.json 版本」与「最高 tag」中的较大者，
+          # 这样手动打过更高的 tag 也不会被 bump 覆盖回去。
+          TAG_VER="$(git tag --list 'v*' --sort=-v:refname | head -n1 | sed 's/^v//')"
+          PKG_VER="$(bun -e "console.log(require('./package.json').version)")"
+          BASE="$(printf '%s\n%s\n' "$TAG_VER" "$PKG_VER" | grep -v '^$' | sort -V | tail -n1)"
+          BASE="${BASE:-0.0.0}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          case "${{ inputs.level }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+            *) echo "未知的递增级别：${{ inputs.level }}"; exit 1 ;;
+          esac
+          NEXT="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "基线 $BASE → 新版本 $NEXT"
+
+      - name: 同步清单文件
+        if: ${{ !inputs.dry_run }}
+        run: bun scripts/set-version.mjs ${{ steps.bump.outputs.version }}
+
+      - name: 提交并打标签
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
+          git commit -m "chore: release $TAG"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin HEAD:main
+          git push origin "$TAG"
+
+      - name: 创建 Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.bump.outputs.version }}
+        run: gh release create "$TAG" --title "$TAG" --generate-notes --draft
+
+      - name: 触发 Release 构建
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.bump.outputs.version }}
+        run: gh workflow run release.yml --ref "$TAG" -f tag="$TAG"

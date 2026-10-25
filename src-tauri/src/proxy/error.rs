@@ -11,6 +11,8 @@ pub enum ProxyError {
     Rejected,
     #[error("不支持的配置：{0}")]
     Unsupported(String),
+    #[error("内置 v2ray 内核不可用：{0}")]
+    Sidecar(String),
 }
 
 impl ProxyError {
@@ -24,6 +26,7 @@ impl ProxyError {
             ProxyError::Vmess(_) => "vmess_error",
             ProxyError::Rejected => "rejected",
             ProxyError::Unsupported(_) => "unsupported_config",
+            ProxyError::Sidecar(_) => "sidecar_error",
         }
     }
 }
