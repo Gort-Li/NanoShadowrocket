@@ -89,5 +89,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.bump.outputs.version }}
         # --ref main：用默认分支上的工作流定义，不依赖 tag 里有没有 release.yml。
-        # 这一步失败也不致命：Release Watch 会在 15 分钟内捡到这个 draft 并补触发。
+        # 必须显式 dispatch：GITHUB_TOKEN 建的 Release 不会触发 release 事件。
         run: gh workflow run release.yml --ref main -f tag="$TAG"

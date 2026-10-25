@@ -3,10 +3,12 @@ name: Release
 # 版本号的唯一来源是 tag，一次跑完「构建 → 校验 → 写文档 → 发布」。
 #
 # 触发路径：
-#   1. 在 GitHub 上把 Release 点成 Publish（release: published）
-#   2. 手建的 draft 被 Release Watch 轮询到，dispatch 本工作流
-#   3. Bump Version 算出版本号后 dispatch 本工作流
-#   4. 手工 dispatch，填 tag
+#   1. 在 GitHub 上建 Release 并点 Publish（release: published）—— 主路径，秒级触发
+#   2. Bump Version 算出版本号后 dispatch 本工作流
+#   3. 手工 dispatch，填 tag
+#
+# 注意：draft release 的 created / edited 不触发任何 workflow（GitHub 限制），
+# 所以别停在「Save draft」——要么直接 Publish，要么用 Bump Version。
 #
 # 幂等：同一个 tag 重复触发时，资产已齐就直接跳过构建，只做校验与发布。
 on:
@@ -27,8 +29,8 @@ on:
 permissions:
   contents: write
 
-# 同一个 tag 串行：published 事件与 Release Watch 撞车时，后一个会排队等前一个跑完，
-# 然后发现资产已齐，只做校验和发布，不会重复编译。
+# 同一个 tag 串行：重复触发（dispatch 重跑、bump 与事件撞车）时后一个排队，
+# 轮到它时资产已齐，只做校验和发布，不会重复编译。
 concurrency:
   group: release-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false

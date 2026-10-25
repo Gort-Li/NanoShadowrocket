@@ -44,7 +44,7 @@ sidecar 只作为出站，不接管系统流量；当前 UI 只暴露 `tcp` 传�
 ## 3. 目录地图
 
 ```
-.github/workflows/          ci / release / release-watch / bump 四个工作流
+.github/workflows/          ci / release / bump 三个工作流
 scripts/                    set-version.mjs、fetch-v2ray.mjs（sidecar 下载校验）、shot-rules.cjs
 RELEASE.md                  发版手册（密钥、Secrets、流程、故障排查）
 
@@ -358,15 +358,15 @@ cd src-tauri && cargo fmt && cargo clippy --lib --tests && cargo test --lib
 | --- | --- | --- |
 | `ci.yml` | push main / PR | 版本号一致性、前端构建、`cargo fmt --check`、`clippy -D warnings`、`cargo test --lib` |
 | `release.yml` | `release: published` / 手动 `workflow_dispatch` | plan（解析 tag、查资产、必要时转回 draft）→ build（按 tag 同步版本号并打包上传）→ finalize（校验 `latest.json` → 重写正文 → 发布） |
-| `release-watch.yml` | `schedule` 每 15 分钟 / 手动 | 扫描缺资产的 Release（含 draft），dispatch `release.yml`；同一 tag 失败 2 次后不再自动重试 |
 | `bump.yml` | 手动 `workflow_dispatch` | 选 patch/minor/major → 算版本 → 提交打 tag → 建 draft Release → 显式 dispatch `release.yml` |
 
-- **draft Release 的 `created` / `edited` 不触发任何 workflow**（GitHub 官方限制），
-  所以「手动建 draft 后自动发版」只能靠 `release-watch.yml` 轮询，最长 15 分钟延迟。
+- **draft Release 的 `created` / `edited` 不触发任何 workflow**（GitHub 官方限制）。
+  所以「建 Release 就自动发版」的前提是**点 Publish 而不是 Save draft**；停在草稿什么都不会发生。
+  不要为此加轮询工作流：15 分钟一次的 cron 在私有仓库一个月烧 ~2880 计费分钟，不值。
 - **不要依赖 `GITHUB_TOKEN` 创建的 Release 去触发 `release` 事件**：GitHub 不会为它启动新工作流。
   `bump.yml` 因此使用 `workflow_dispatch`（该事件允许被 `GITHUB_TOKEN` 触发），并需要 `actions: write`。
 - Release 先以 draft 创建，资产校验通过后才发布；这样构建期间 `releases/latest` 仍指向上一个完整版本。
-  直接点 Publish 也安全：`plan` 发现缺资产会先把 Release 转回 draft，构建完在 `finalize` 里重新发布。
+  直接在 UI 点 Publish 也安全：`plan` 发现缺资产会先把 Release 转回 draft，构建完在 `finalize` 里重新发布。
 - `release.yml` 幂等：资产已齐时跳过构建，只做校验与发布；`concurrency` 按 tag 串行，重复触发不会并发打包。
 - 打包用 `tauri-apps/tauri-action@v0`，`releaseId` 指向已存在的 Release，`uploadUpdaterJson: true` 生成 `latest.json`；
   `updaterJsonPreferNsis: true` 确保 Windows 更新指向 NSIS 的 `setup.exe`。
