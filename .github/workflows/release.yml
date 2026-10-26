@@ -177,6 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_REPO: ${{ github.repository }}
+      REPO: ${{ github.repository }}
     steps:
       - name: 校验更新清单
         shell: bash
@@ -185,7 +186,7 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release download "$TAG" --pattern latest.json --dir . --clobber
+          gh release download "$TAG" -R "$REPO" --pattern latest.json --dir . --clobber
           node -e "
             const j = require('./latest.json');
             const p = j.platforms && j.platforms['windows-x86_64'];
@@ -208,7 +209,7 @@ jobs:
             const p = require('./latest.json').platforms['windows-x86_64'];
             console.log(decodeURIComponent(new URL(p.url).pathname.split('/').pop()));
           ")"
-          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"; then
+          if ! gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"; then
             echo "latest.json 指向的资产不存在：$ASSET"
             exit 1
           fi
@@ -288,11 +289,11 @@ jobs:
             echo "$TAG 已经是发布状态，跳过"
             exit 0
           fi
-          PRE="$(gh release view "$TAG" --json isPrerelease --jq .isPrerelease)"
+          PRE="$(gh release view "$TAG" -R "$REPO" --json isPrerelease --jq .isPrerelease)"
           if [ "$PRE" = "true" ]; then
             # 预发布不占用 releases/latest，客户端检查更新时看不到它。
             gh release edit "$TAG" --draft=false --prerelease
           else
-            gh release edit "$TAG" --draft=false --latest
+            gh release edit "$TAG" -R "$REPO" --draft=false --latest
           fi
           echo "已发布 $TAG"
