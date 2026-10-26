@@ -11,11 +11,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use app_lib::proxy::dns::{DnsResolver, DnsSetting};
 use app_lib::proxy::router::{Router, RouterHandle};
 use app_lib::proxy::target::Target;
 use app_lib::rules::{build_ruleset, Policy, SourceText};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tokio::runtime::Runtime;
 
 /// 生成接近生产规模的规则文本：约 5 万条域名后缀黑名单 + 关键词 + IP 规则。
@@ -37,7 +37,10 @@ fn big_ruleset_wordlist() -> String {
 
 fn setup_router() -> Arc<Router> {
     let rules = build_ruleset(&[SourceText::custom(big_ruleset_wordlist())], Policy::Proxy);
-    let router = Router::new(Arc::new(rules), Arc::new(DnsResolver::new(DnsSetting::System, false)));
+    let router = Router::new(
+        Arc::new(rules),
+        Arc::new(DnsResolver::new(DnsSetting::System, false)),
+    );
     RouterHandle::new(router).get()
 }
 
@@ -81,11 +84,7 @@ fn bench_miss(c: &mut Criterion) {
 fn bench_decide_domain(c: &mut Criterion) {
     let rules = build_ruleset(&[SourceText::custom(big_ruleset_wordlist())], Policy::Proxy);
     c.bench_function("decide_domain_direct", |b| {
-        b.iter(|| {
-            black_box(
-                rules.decide_domain(black_box("ads.google-analytics.example.com")),
-            )
-        });
+        b.iter(|| black_box(rules.decide_domain(black_box("ads.google-analytics.example.com"))));
     });
 }
 

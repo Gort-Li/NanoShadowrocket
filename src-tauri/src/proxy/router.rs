@@ -115,9 +115,7 @@ impl Router {
 
     pub async fn decide(&self, target: &Target) -> Arc<RouteDecision> {
         match target {
-            Target::Ip(ip, _) => {
-                Arc::new(self.build_decision(self.rules.decide_ip(*ip), None))
-            }
+            Target::Ip(ip, _) => Arc::new(self.build_decision(self.rules.decide_ip(*ip), None)),
             Target::Domain(host, _) => {
                 let key = host.trim_end_matches('.').to_ascii_lowercase();
                 if let Some(hit) = self.cache_get(&key) {

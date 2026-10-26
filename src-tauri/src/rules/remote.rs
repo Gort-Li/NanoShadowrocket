@@ -304,7 +304,9 @@ pub fn build_client() -> Result<reqwest::Client, RemoteError> {
         }
     }
 
-    builder.build().map_err(|e| RemoteError::Network(sanitize(&e.to_string())))
+    builder
+        .build()
+        .map_err(|e| RemoteError::Network(sanitize(&e.to_string())))
 }
 
 #[cfg(test)]
