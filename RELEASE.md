@@ -106,7 +106,7 @@ Get-Content "$env:USERPROFILE\.tauri\nano-shadowrocket.key" -Raw | Set-Clipboard
 
 1. **plan**：解析 tag（事件里的 `release.tag_name`，或 dispatch 的输入）→ 校验格式 → 查 Release 是否存在 → 判断资产是否已齐 → 如果已公开但缺资产，先转回 draft
 2. **build**：按 tag 检出 → `bun install` → `prepare:sidecar` → `set-version` → `tauri-action` 编译 NSIS 并上传 `NanoShadowrocket_<版本>_x64-setup.exe`、`.sig`、`latest.json`
-3. **finalize**：校验 `latest.json`（必须有 `windows-x86_64` 条目、版本与 tag 一致、指向的 `.exe` 资产真实存在）→ 重写正文（保留手写内容 + generate-notes 变更列表 + 下载/校验说明）→ 发布 draft（预发布标 prerelease，正式版标 latest）
+3. **finalize**：先按 tag `checkout`，保证 runner 上有 `.git` 与正确的 origin remote，`gh` 能稳定解析到仓库；所有 `gh` 命令统一显式传 `-R "$REPO"`，不再依赖本地 git  兜底检测 → 校验 `latest.json`（必须有 `windows-x86_64` 条目、版本与 tag 一致、指向的 `.exe` 资产真实存在）→ 重写正文（保留手写内容 + generate-notes 变更列表 + 下载/校验说明）→ 发布 draft（预发布标 prerelease，正式版标 latest）
 
 资产已齐时 `plan` 会把 `need_build` 置 false，`build` 整段跳过，`finalize` 照常收尾。所以重复触发不会重复编译——`concurrency` 按 tag 串行，后一个跑起来时资产已经齐了。
 
@@ -143,6 +143,7 @@ bun scripts/set-version.mjs 0.2.0 --check     # 指定期望版本校验
 | 构建报 `Signing key not found` | Secret 没配或私钥内容不完整；检查 `TAURI_SIGNING_PRIVATE_KEY` 是否包含整段私钥 |
 | 构建报 `No updater private key password provided` | 密钥没有密码时的正常提示；如果密钥有密码，检查 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 是否配置 |
 | 工作流卡在 `校验更新清单` | `latest.json` 没生成、版本不匹配或资产缺失，看 tauri-action 日志里有没有 `Updater asset ... not found` |
+| `finalize` 报 `failed to run git: not a git repository` | `gh` 解析不到仓库。已通过「`finalize` 先 `checkout` + 所有 `gh` 命令显式 `-R "$REPO"`」修复。若仍复现，先确认这次运行的 `release.yml` 是否真的包含最新提交——GitHub 跑的是仓库里的版本，本地未 `commit`+`push` 的改动不会生效 |
 | Bump 创建了 Release 但没有开始构建 | 检查 Bump 的 `触发 Release 构建` 步骤；需要 `actions: write`，且 `release.yml` 必须已在默认分支上。失败就手动跑一次 **Actions → Release → Run workflow** |
 | 构建失败后客户端仍检查旧版本 | 预期行为：Release 还是 draft，`releases/latest` 不会指向它；修好后重跑 Release 工作流即可 |
 | 客户端提示已是最新版本但确实有新版 | `latest.json` 的 `version` 取自 `tauri.conf.json`，检查 tag 与清单版本是否同步 |

@@ -99,7 +99,7 @@ jobs:
           # 已经公开但还没构建完：先转回 draft，别让 releases/latest 指向半成品。
           # 构建成功后在 finalize 里再发布，失败就停在 draft，客户端不受影响。
           if [ "$NEED_BUILD" = "true" ] && [ "$DRAFT" = "false" ]; then
-            if gh release edit "$TAG" --draft=true; then
+            if gh release edit "$TAG" -R "$REPO" --draft=true; then
               DRAFT=true
               echo "::notice title=已转回 draft::$TAG 原本是发布状态但缺少资产，已临时转为 draft，构建完成后自动发布"
             else
@@ -179,6 +179,14 @@ jobs:
       GH_REPO: ${{ github.repository }}
       REPO: ${{ github.repository }}
     steps:
+      # finalize 里大量调用 gh CLI，gh 在解析仓库时可能退回到本地 git。
+      # checkout 会建立 .git 和正确的 origin remote，无论 gh 走哪条
+      # 解析路径都能定位到仓库，不再出现 "not a git repository"。
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+          fetch-depth: 0
+
       - name: 校验更新清单
         shell: bash
         env:
@@ -223,7 +231,7 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release view "$TAG" --json body --jq '.body // ""' > current.md
+          gh release view "$TAG" -R "$REPO" --json body --jq '.body // ""' > current.md
 
           # 手写正文保护：优先取 nano:manual 标记区间；没有标记时，
           # 判断旧正文是不是自动生成的（GitHub 的 generate-notes 或旧版本工作流），
@@ -275,7 +283,7 @@ jobs:
             echo
             echo "安装包 \`NanoShadowrocket_${TAG#v}_x64-setup.exe\` 由 minisign 签名，客户端会通过 \`latest.json\` 中的签名自动校验。"
           } > body.md
-          gh release edit "$TAG" --notes-file body.md
+          gh release edit "$TAG" -R "$REPO" --notes-file body.md
 
       - name: 发布 Release
         shell: bash
@@ -284,7 +292,7 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
-          DRAFT="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          DRAFT="$(gh release view "$TAG" -R "$REPO" --json isDraft --jq .isDraft)"
           if [ "$DRAFT" != "true" ]; then
             echo "$TAG 已经是发布状态，跳过"
             exit 0
@@ -292,7 +300,7 @@ jobs:
           PRE="$(gh release view "$TAG" -R "$REPO" --json isPrerelease --jq .isPrerelease)"
           if [ "$PRE" = "true" ]; then
             # 预发布不占用 releases/latest，客户端检查更新时看不到它。
-            gh release edit "$TAG" --draft=false --prerelease
+            gh release edit "$TAG" -R "$REPO" --draft=false --prerelease
           else
             gh release edit "$TAG" -R "$REPO" --draft=false --latest
           fi

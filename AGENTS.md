@@ -357,7 +357,7 @@ cd src-tauri && cargo fmt && cargo clippy --lib --tests && cargo test --lib
 | 工作流 | 触发 | 作用 |
 | --- | --- | --- |
 | `ci.yml` | push main / PR | 版本号一致性、前端构建、`cargo fmt --check`、`clippy -D warnings`、`cargo test --lib` |
-| `release.yml` | `release: published` / 手动 `workflow_dispatch` | plan（解析 tag、查资产、必要时转回 draft）→ build（按 tag 同步版本号并打包上传）→ finalize（校验 `latest.json` → 重写正文 → 发布） |
+| `release.yml` | `release: published` / 手动 `workflow_dispatch` | plan（解析 tag、查资产、必要时转回 draft）→ build（按 tag 同步版本号并打包上传）→ finalize（先按 tag `checkout`，`gh` 命令统一显式 `-R "$REPO"`，校验 `latest.json` → 重写正文 → 发布） |
 | `bump.yml` | 手动 `workflow_dispatch` | 选 patch/minor/major → 算版本 → 提交打 tag → 建 draft Release → 显式 dispatch `release.yml` |
 
 - **draft Release 的 `created` / `edited` 不触发任何 workflow**（GitHub 官方限制）。
@@ -373,6 +373,9 @@ cd src-tauri && cargo fmt && cargo clippy --lib --tests && cargo test --lib
   `releaseDraft` 必须显式传入当前 draft 状态——它的默认值是 `false`，会把 draft 提前公开。
 - `latest.json` 的 `platforms["windows-x86_64"]` 指向 `setup.exe` 资产本身（不是 zip），
   客户端 `tauri-plugin-updater` 能直接识别 exe 并以 NSIS 参数运行。
+- `finalize` 没有源码需求但会大量调用 `gh`。`gh` 在无 `-R`/`GH_REPO` 时会退回到本地 git 检测仓库，
+  因此 `finalize` 先 `actions/checkout@v4` 建立 `.git` 与 origin，所有 `gh release` 命令都显式传 `-R "$REPO"`，
+  从根上避免 `failed to run git: not a git repository`。
 - 发布流程的细节与故障排查见 [RELEASE.md](RELEASE.md)。
 
 ### 应用内更新
