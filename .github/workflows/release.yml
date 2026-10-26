@@ -175,6 +175,8 @@ jobs:
         && (needs.build.result == 'success' || needs.build.result == 'skipped')
       }}
     runs-on: ubuntu-latest
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: 校验更新清单
         shell: bash
