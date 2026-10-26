@@ -251,14 +251,17 @@ impl Default for AppConfig {
             allow_lan: false,
             default_policy: Policy::Proxy,
             system_proxy: true,
-            proxy_env: false,
-            launch_at_startup: false,
+            proxy_env: true,
+            launch_at_startup: true,
             dns_server: "system".into(),
             ipv6: true,
             nodes: Vec::new(),
             selected_node: None,
             custom_rules: DEFAULT_CUSTOM_RULES.to_string(),
-            remote_rules: Vec::new(),
+            remote_rules: vec![RemoteRuleConfig::new(
+                "Johnshall 广告拦截",
+                "https://johnshall.github.io/Shadowrocket-ADBlock-Rules-Forever/sr_top500_banlist_ad.conf",
+            )],
             proxy_dirty: false,
             proxy_snapshot: None,
             env_dirty: false,
@@ -338,10 +341,13 @@ mod tests {
         let cfg: AppConfig = serde_json::from_str(r#"{"listenPort":1080}"#).unwrap();
         assert_eq!(cfg.listen_port, 1080);
         assert!(cfg.ipv6);
-        // 老配置文件没有这两个字段，必须回落到「未托管环境变量」。
-        assert!(!cfg.proxy_env);
+        // 缺失字段回落到 Default。
+        assert!(cfg.proxy_env);
         assert!(!cfg.env_dirty);
         assert!(cfg.env_snapshot.is_none());
+        // 默认包含一条远程订阅规则。
+        assert_eq!(cfg.remote_rules.len(), 1);
+        assert_eq!(cfg.remote_rules[0].name, "Johnshall 广告拦截");
     }
 
     #[test]

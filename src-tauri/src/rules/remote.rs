@@ -272,14 +272,39 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), RemoteError> {
     })
 }
 
-/// 供调用方创建带合理超时的 HTTP 客户端。
+/// 构建用于下载远程规则的 HTTP 客户端。
+///
+/// 代理选择优先级：
+/// 1. `HTTPS_PROXY` / `HTTP_PROXY` 环境变量（「命令行代理环境变量」功能写入的）
+/// 2. Windows 系统代理设置（应用开启系统代理时自动配置的，即 IE/Internet Options 里的代理）
+/// 3. 直连（无代理）
+///
+/// 这样规则更新不强制依赖「命令行代理环境变量」开关——只要系统代理开着就能走代理。
 pub fn build_client() -> Result<reqwest::Client, RemoteError> {
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .user_agent("NanoShadowrocket/0.1")
         .timeout(Duration::from_secs(25))
-        .connect_timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|e| RemoteError::Network(sanitize(&e.to_string())))
+        .connect_timeout(Duration::from_secs(8));
+
+    let mut has_proxy = false;
+    if let Ok(proxy) = std::env::var("HTTPS_PROXY").or_else(|_| std::env::var("HTTP_PROXY")) {
+        if let Ok(proxy) = reqwest::Proxy::all(&proxy) {
+            builder = builder.proxy(proxy);
+            has_proxy = true;
+        }
+    }
+    if !has_proxy {
+        if let Ok(sys_snapshot) = crate::sysproxy::snapshot() {
+            if sys_snapshot.proxy_enable != 0 && !sys_snapshot.proxy_server.is_empty() {
+                let url = format!("http://{}", sys_snapshot.proxy_server);
+                if let Ok(proxy) = reqwest::Proxy::all(&url) {
+                    builder = builder.proxy(proxy);
+                }
+            }
+        }
+    }
+
+    builder.build().map_err(|e| RemoteError::Network(sanitize(&e.to_string())))
 }
 
 #[cfg(test)]
