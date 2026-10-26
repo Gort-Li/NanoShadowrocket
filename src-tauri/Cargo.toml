@@ -12,6 +12,13 @@ rust-version = "1.90"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "route_bench"
+harness = false
+
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
 

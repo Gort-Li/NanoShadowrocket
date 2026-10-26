@@ -3,6 +3,9 @@
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "NanoShadowrocket";
 
+/// 随开机自启携带的静默启动参数：进程据此隐藏主窗口、只驻留托盘与后台任务。
+pub const SILENT_FLAG: &str = "--hidden";
+
 /// 是否已配置开机自启。
 pub fn is_enabled() -> bool {
     #[cfg(windows)]
@@ -34,7 +37,7 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
 
         if enabled {
             let exe = std::env::current_exe().map_err(|e| format!("无法定位程序路径：{e}"))?;
-            let value = format!("\"{}\"", exe.display());
+            let value = format!("\"{}\" {}", exe.display(), SILENT_FLAG);
             key.set_value(VALUE_NAME, &value)
                 .map_err(|e| format!("写入启动项失败：{e}"))?;
         } else if key.get_value::<String, _>(VALUE_NAME).is_ok() {

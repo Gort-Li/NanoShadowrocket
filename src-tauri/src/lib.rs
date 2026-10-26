@@ -21,12 +21,17 @@ use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 use crate::config::ConfigStore;
 use crate::events::TrafficPayload;
 use crate::state::AppState;
+use crate::sysproxy::autostart::SILENT_FLAG;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // 第二个实例同样以 `--hidden` 发起（如登录期自启+手动双击竞态）时，
+            // 继续静默驻留，不打断已有会话。
+            if !args.iter().any(|a| a == SILENT_FLAG) {
+                show_main(app);
+            }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -49,6 +54,14 @@ pub fn run() {
             setup_tray(app)?;
             spawn_traffic(app.handle().clone(), state.clone());
             spawn_remote_scheduler(app.handle().clone(), state);
+
+            // 开机自启（`--hidden`）时静谧化：只驻留托盘与后台任务，不弹出主窗口。
+            if is_silent_start() {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -155,6 +168,11 @@ fn config_dir() -> Option<std::path::PathBuf> {
     let identifier = context.config().identifier.clone();
     let appdata = std::env::var_os("APPDATA")?;
     Some(std::path::PathBuf::from(appdata).join(identifier))
+}
+
+/// 是否以开机自启的静默形态启动（命令行携带 `--hidden`）。
+fn is_silent_start() -> bool {
+    std::env::args().any(|arg| arg == SILENT_FLAG)
 }
 
 fn show_main(app: &AppHandle) {

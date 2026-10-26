@@ -5,9 +5,10 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use serde::Serialize;
 
 use super::dns::DnsResolver;
@@ -58,7 +59,7 @@ pub struct RuleTestResult {
 }
 
 struct CacheEntry {
-    decision: RouteDecision,
+    decision: Arc<RouteDecision>,
     expires: Instant,
 }
 
@@ -112,9 +113,11 @@ impl Router {
         self.rules.default_policy()
     }
 
-    pub async fn decide(&self, target: &Target) -> RouteDecision {
+    pub async fn decide(&self, target: &Target) -> Arc<RouteDecision> {
         match target {
-            Target::Ip(ip, _) => self.build_decision(self.rules.decide_ip(*ip), None),
+            Target::Ip(ip, _) => {
+                Arc::new(self.build_decision(self.rules.decide_ip(*ip), None))
+            }
             Target::Domain(host, _) => {
                 let key = host.trim_end_matches('.').to_ascii_lowercase();
                 if let Some(hit) = self.cache_get(&key) {
@@ -123,7 +126,7 @@ impl Router {
 
                 let first = self.rules.decide_domain(&key);
                 let mut resolved = None;
-                let decision = if first.needs_resolve {
+                let raw = if first.needs_resolve {
                     match self.dns.resolve(&key).await {
                         Ok(ips) => {
                             let mut merged = first;
@@ -146,7 +149,7 @@ impl Router {
                     first
                 };
 
-                let decision = self.build_decision(decision, resolved);
+                let decision = Arc::new(self.build_decision(raw, resolved));
                 self.cache_put(key, decision.clone());
                 decision
             }
@@ -192,8 +195,8 @@ impl Router {
         }
     }
 
-    fn cache_get(&self, key: &str) -> Option<RouteDecision> {
-        let mut cache = self.cache.lock().ok()?;
+    fn cache_get(&self, key: &str) -> Option<Arc<RouteDecision>> {
+        let mut cache = self.cache.lock();
         let entry = cache.get(key)?;
         if entry.expires <= Instant::now() {
             cache.remove(key);
@@ -202,10 +205,8 @@ impl Router {
         Some(entry.decision.clone())
     }
 
-    fn cache_put(&self, key: String, decision: RouteDecision) {
-        let Ok(mut cache) = self.cache.lock() else {
-            return;
-        };
+    fn cache_put(&self, key: String, decision: Arc<RouteDecision>) {
+        let mut cache = self.cache.lock();
         if cache.len() >= CACHE_LIMIT {
             let now = Instant::now();
             cache.retain(|_, entry| entry.expires > now);
