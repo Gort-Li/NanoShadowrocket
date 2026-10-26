@@ -32,7 +32,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ0N0UyOEEwRTU2NjhFQjcKUldTM2ptYmxvQ2grUklrUTB4WnJkMmFkQU81dEo4WHRuTjNZY2JaT0xXOFFDUG1DNUt0UDgzY2UK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIxOEI1NkRFRjMwNERDOTEKUldTUjNBVHozbGFMc1ZuWXNNWTluenlvaXMvaFFOZDRKQ1VadE5RVUZocG03U2hDRUx4byt4cEQK",
       "endpoints": [
         "https://github.com/Gort-Li/NanoShadowrocket/releases/latest/download/latest.json"
       ],
