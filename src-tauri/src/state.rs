@@ -90,7 +90,6 @@ struct RunningProxy {
 pub struct AppState {
     pub config: Arc<ConfigStore>,
     pub rules_dir: PathBuf,
-    pub remote_client: Arc<reqwest::Client>,
     pub stats: Arc<TrafficStats>,
     pub active: Arc<ActiveConnections>,
     router: Arc<RouterHandle>,
@@ -142,12 +141,10 @@ impl AppState {
         let _ = std::fs::remove_file(config_dir.join("v2ray-sidecar.json"));
 
         let router = build_router(&cfg, &dir);
-        let remote_client = Arc::new(rules::build_client()?);
 
         let state = Self {
             config: Arc::new(config),
             rules_dir: dir,
-            remote_client,
             stats: Arc::new(TrafficStats::new()),
             active: Arc::new(ActiveConnections::new()),
             router: RouterHandle::new(router),
@@ -505,9 +502,13 @@ impl AppState {
     }
 
     /// 立即更新一个远程规则源；内容变化时自动重编译规则集。
+    ///
+    /// 每次更新都根据「当前」系统代理 / 环境变量状态重新构建 HTTP 客户端，
+    /// 而不是复用启动时缓存的 client——这样即使用户在启动后才开启代理，
+    /// 远程订阅也能正确走代理下载。
     pub async fn update_remote(&self, id: &str) -> Result<rules::RemoteOutcome, AppError> {
-        let outcome =
-            rules::update_source(&self.remote_client, &self.config, &self.rules_dir, id).await?;
+        let client = rules::build_client()?;
+        let outcome = rules::update_source(&client, &self.config, &self.rules_dir, id).await?;
         if outcome.changed {
             self.reload_rules();
         }

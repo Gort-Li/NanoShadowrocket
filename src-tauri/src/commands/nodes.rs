@@ -89,9 +89,24 @@ pub fn add_node_from_link(
     })
 }
 
+/// 保存节点。若编辑的是「当前正在运行」的节点，配置变更后会自动重启，
+/// 让新服务器配置立即生效（与 select_node 的运行中自动重启保持一致）。
 #[tauri::command]
-pub fn save_node(state: State<'_, Arc<AppState>>, input: NodeInput) -> Result<NodeEntry, AppError> {
+pub async fn save_node(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    input: NodeInput,
+) -> Result<NodeEntry, AppError> {
     validate(&input)?;
+    let st = state.status().await;
+    let edited_running = input
+        .id
+        .as_deref()
+        .is_some_and(|id| st.running && st.node_id.as_deref() == Some(id));
+    if edited_running {
+        state.stop().await?;
+    }
+
     let name = if input.name.trim().is_empty() {
         format!("{}:{}", input.host.trim(), input.port)
     } else {
@@ -136,7 +151,13 @@ pub fn save_node(state: State<'_, Arc<AppState>>, input: NodeInput) -> Result<No
         saved = Some(node);
     })?;
 
-    saved.ok_or_else(|| AppError::Internal("保存节点失败".into()))
+    let saved = saved.ok_or_else(|| AppError::Internal("保存节点失败".into()))?;
+
+    if edited_running {
+        let status = state.start().await?;
+        crate::events::proxy(&app, &status);
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
