@@ -1,6 +1,6 @@
 [package]
 name = "nano-shadowrocket"
-version = "0.1.0"
+version = "1.2.0"
 description = "NanoShadowrocket - 极轻量 Windows 代理客户端"
 authors = ["Gort"]
 license = "MIT"
