@@ -57,6 +57,7 @@ export interface AppConfig {
   systemProxy: boolean;
   proxyEnv: boolean;
   launchAtStartup: boolean;
+  autoStartProxy: boolean;
   dnsServer: string;
   ipv6: boolean;
   nodes: Node[];
@@ -174,6 +175,7 @@ export interface SettingsInput {
   systemProxy: boolean;
   proxyEnv: boolean;
   launchAtStartup: boolean;
+  autoStartProxy: boolean;
   dnsServer: string;
   ipv6: boolean;
 }

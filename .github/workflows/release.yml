@@ -1,44 +1,28 @@
 name: Release
 
-# 版本号的唯一来源是 tag，一次跑完「构建 → 校验 → 写文档 → 发布」。
+# 两个入口共用这一套流程，后面的 plan → build → finalize 完全一致：
+#   ① 本地 `bun run release`：改版本号 → 提交 → 打 tag → 推送 → 建发布态 Release（脚本不等构建）
+#   ② 网页 Releases → Draft a new release → Publish
 #
-# 触发路径：
-#   1. 在 GitHub 上建 Release 并点 Publish（release: published）—— 主路径，秒级触发
-#   2. Bump Version 算出版本号后 dispatch 本工作流
-#   3. 手工 dispatch，填 tag
-#
-# 注意：draft release 的 created / edited 不触发任何 workflow（GitHub 限制），
-# 所以别停在「Save draft」——要么直接 Publish，要么用 Bump Version。
-#
-# 幂等：同一个 tag 重复触发时，资产已齐就直接跳过构建，只做校验与发布。
+# 唯一触发是 release: published。draft 的 created / edited 不触发任何 workflow（GitHub 限制），
+# 所以别停在 Save draft。两个入口建出来的 Release 都还没有资产，plan 会先转回 draft，
+# build 编译上传后 finalize 再发布，失败就停在 draft。
 on:
   release:
     types: [published]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "要构建的 tag（vX.Y.Z），必须已经存在对应的 Release"
-        required: true
-        type: string
-      force:
-        description: "资产已存在也强制重建"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
 
-# 同一个 tag 串行：重复触发（dispatch 重跑、bump 与事件撞车）时后一个排队，
-# 轮到它时资产已齐，只做校验和发布，不会重复编译。
+# 同一个 tag 串行：重复发布（重试）时后一个排队，轮到它时资产已齐，只做校验和发布。
 concurrency:
-  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  group: release-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
-run-name: Release ${{ github.event.release.tag_name || inputs.tag }}
+run-name: Release ${{ github.event.release.tag_name }}
 
 jobs:
-  # 先摸清现状：tag 合法性、Release 是否存在、资产是否已齐、要不要先转回 draft。
+  # 先摸清现状：tag 合法性、资产是否已齐、要不要先转回 draft。
   plan:
     runs-on: ubuntu-latest
     outputs:
@@ -56,17 +40,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          EVENT_TAG: ${{ github.event.release.tag_name }}
-          INPUT_TAG: ${{ inputs.tag }}
-          FORCE: ${{ inputs.force }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
 
-          TAG="${EVENT_TAG:-${INPUT_TAG:-}}"
-          if [ -z "$TAG" ]; then
-            echo "没拿到 tag：事件里没有 release.tag_name，dispatch 也没填 tag"
-            exit 1
-          fi
           if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
             echo "tag 格式不合法：「$TAG」。要求 vX.Y.Z，可选 -beta.1 这类后缀"
             exit 1
@@ -74,7 +51,7 @@ jobs:
           echo "tag = $TAG"
 
           if ! gh api "repos/$REPO/releases/tags/$TAG" > release.json 2>/dev/null; then
-            echo "找不到 tag 为 $TAG 的 Release。先在 GitHub 上建好 Release（draft 也行），再跑这个工作流。"
+            echo "找不到 tag 为 $TAG 的 Release"
             exit 1
           fi
 
@@ -91,7 +68,7 @@ jobs:
           if echo "$ASSETS" | grep -Eq '_x64-setup\.exe$'; then HAS_EXE=1; else HAS_EXE=0; fi
 
           NEED_BUILD=true
-          if [ "$HAS_UPDATER" = "1" ] && [ "$HAS_EXE" = "1" ] && [ "$FORCE" != "true" ]; then
+          if [ "$HAS_UPDATER" = "1" ] && [ "$HAS_EXE" = "1" ]; then
             NEED_BUILD=false
             echo "资产已齐（latest.json + setup.exe），跳过构建"
           fi
@@ -165,7 +142,7 @@ jobs:
           updaterJsonPreferNsis: true
           args: --bundles nsis
 
-  # 构建成功（或因资产已齐而跳过）才收尾；构建失败时 release 停在 draft，等 Watch 重试。
+  # 构建成功（或因资产已齐而跳过）才收尾；构建失败时 release 停在 draft，重新 Publish 即可重试。
   finalize:
     needs: [plan, build]
     if: >-

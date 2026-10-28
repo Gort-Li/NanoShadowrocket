@@ -32,6 +32,7 @@ sidecar 只作为出站，不接管系统流量；当前 UI 只暴露 `tcp` 传�
 | 桌面端开发（推荐） | `bun run tauri:dev` |
 | 前端类型检查 + 构建 | `bun run build` |
 | 打包 NSIS | `bun run tauri:build` |
+| 本地一键发版（版本号 + tag + 推送 + 建 Release，打包由 CI 完成） | `bun run release [--version X.Y.Z] [--no-release]` |
 | 后端格式化 | `cd src-tauri && cargo fmt` |
 | 静态检查（必须 0 警告） | `cargo clippy --lib --tests` |
 | 单元测试 | `cargo test --lib` |
@@ -44,9 +45,9 @@ sidecar 只作为出站，不接管系统流量；当前 UI 只暴露 `tcp` 传�
 ## 3. 目录地图
 
 ```
-.github/workflows/          ci / release / bump 三个工作流
-scripts/                    set-version.mjs、fetch-v2ray.mjs（sidecar 下载校验）、shot-rules.cjs
-RELEASE.md                  发版手册（密钥、Secrets、流程、故障排查）
+.github/workflows/          ci / release 两个工作流
+scripts/                    set-version.mjs、release.mjs（本地一键发版：版本号 + tag + Release）、fetch-v2ray.mjs（sidecar 下载校验）、shot-rules.cjs
+RELEASE.md                  发版手册（面向维护者的操作步骤，原理在本文件第 11 节）
 
 src/                         前端
 ├── App.tsx                  页面切换（hash 路由）、事件订阅、快捷键
@@ -257,7 +258,12 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 - 还原是**无条件**的，不提供开关。早期版本的 `restoreProxyOnExit` 已删除（UI 上是摆设，
   后端从未读取），老配置里的残留字段由 serde 静默忽略，不要重新引入这个字段。
 - 写入后调用 `InternetSetOptionW(SETTINGS_CHANGED / REFRESH)`，失败不影响注册表结果。
-- 开机自启写 `HKCU\...\CurrentVersion\Run` 的 `NanoShadowrocket` 值。
+- 开机自启写 `HKCU\...\CurrentVersion\Run` 的 `NanoShadowrocket` 值，命令行带 `--hidden`。
+- 主窗口在 `tauri.conf.json` 里是 `visible: false`，由 `setup` 决定是否 `show()`：
+  静默启动（`--hidden`）永不显示，只驻留托盘；正常启动才显示。不要改回 `visible: true`，
+  否则开机自启会先闪一个空窗口再被 `hide()`。
+- `AppConfig.auto_start_proxy`（默认 true）为真时，静默启动会按 2 / 10 / 30 秒退避自动
+  `state.start()`，失败只写日志，不弹窗。
 - 单实例由 `tauri-plugin-single-instance` 保证，避免多进程反复改系统代理。
 
 ### 代理环境变量（`sysproxy/env_proxy.rs`）
@@ -352,31 +358,65 @@ cd src-tauri && cargo fmt && cargo clippy --lib --tests && cargo test --lib
   不带版本号时以 `package.json` 为基准，CI 用这个模式检查三处清单与 `Cargo.lock` 是否同步。
 - 新增需要记录版本号的地方时，**不要**再写死字符串。
 
+### 发布入口
+
+只有两个入口，**共用同一个工作流** `release.yml`，不存在第二套发布流程。打包（NSIS 安装包 +
+minisign 签名 + `latest.json`）与 Release 收尾一律由它完成，本地脚本只改版本号、打 tag、
+建 Release，不编译、不上传资产：
+
+| 入口 | 本机做的事 | 谁打包 |
+| --- | --- | --- |
+| 本地一键发版 `bun run release` | 改版本号、提交、打 tag、推送、建 Release | GitHub Actions |
+| GitHub 建 Release | 网页上打 tag + 建 Release 并 **Publish** | GitHub Actions |
+
+- 两条路的共同点：都靠「建一个发布态 Release」触发同一条 `release: published` 事件，
+  因此 CI 侧不需要算版本号 / 提交 / 打 tag 的能力。历史上的 `bump.yml`（Actions 里选
+  patch/minor/major）与 `release.yml` 的 `workflow_dispatch` 入口已删除：本地脚本覆盖了它们，
+  而它们都要额外处理「`GITHUB_TOKEN` 创建的 Release 不触发 `release` 事件」这条限制（只能靠
+  dispatch 补），属于纯复杂度。
+- **draft Release 的 `created` / `edited` 不触发任何 workflow**（GitHub 官方限制）。
+  所以「建 Release 就自动发版」的前提是**点 Publish 而不是 Save draft**；停在草稿什么都不会发生。
+  不要为此加轮询工作流：15 分钟一次的 cron 在私有仓库一个月烧 ~2880 计费分钟，不值。
+- **重试不靠 dispatch**：CI 构建失败时 Release 停在 draft，重新点一次 Publish 会再次触发同一事件。
+
+### 本地发布脚本（`scripts/release.mjs`）
+
+- 入口 `release.mjs` 负责 CLI、版本基线与编排；`scripts/release/lib.mjs`（路径 / 子进程 / semver）
+  与 `publish.mjs`（preflight、提交推送、建 Release）。
+- 步骤：校验 → 算版本号 → 同步清单 → 提交 → 打 annotated tag → 推送 `main` 与 tag
+  → `gh release create --generate-notes`（预发布加 `--prerelease`）。
+- 版本基线取 max(`package.json` 版本, 最高 `v*` tag)：手动打过高 tag 不会被冲回去。
+  不带 `--version` 时 patch +1；带了必须严格大于基线，否则报错退出。
+- **提交前只允许四个版本清单是脏的**，其它改动一律中止，防止把杂项混进发版提交。
+- **脚本不编译、不上传资产**：`gh release create` 只建一个没有资产的发布态 Release，
+  `release.yml` 的 `plan` 发现缺资产会先转回 draft，再由 `build` 编译上传、`finalize` 发布。
+  `latest.json` 由 `tauri-action` 的 `uploadUpdaterJson` 生成（签名字段来自 `.sig`），本地不要手写。
+- **建完 Release 就返回，不轮询构建状态**：剩下的交给 `release.yml`，用户不必等打包结束。
+- `--no-release` 只做「同步清单 → 提交 → 推送」，不打 tag、不建 Release。
+- 子进程用 `process.execPath` 拉起 bun，因此脚本必须用 bun 运行（脚本里有运行时检查）。
+
 ### GitHub Actions（`.github/workflows`）
 
 | 工作流 | 触发 | 作用 |
 | --- | --- | --- |
 | `ci.yml` | push main / PR | 版本号一致性、前端构建、`cargo fmt --check`、`clippy -D warnings`、`cargo test --lib` |
-| `release.yml` | `release: published` / 手动 `workflow_dispatch` | plan（解析 tag、查资产、必要时转回 draft）→ build（按 tag 同步版本号并打包上传）→ finalize（先按 tag `checkout`，`gh` 命令统一显式 `-R "$REPO"`，校验 `latest.json` → 重写正文 → 发布） |
-| `bump.yml` | 手动 `workflow_dispatch` | 选 patch/minor/major → 算版本 → 提交打 tag → 建 draft Release → 显式 dispatch `release.yml` |
+| `release.yml` | `release: published` | plan（解析 tag、查资产、必要时转回 draft）→ build（按 tag 同步版本号并打包上传）→ finalize（校验 `latest.json` → 重写正文 → 发布） |
 
-- **draft Release 的 `created` / `edited` 不触发任何 workflow**（GitHub 官方限制）。
-  所以「建 Release 就自动发版」的前提是**点 Publish 而不是 Save draft**；停在草稿什么都不会发生。
-  不要为此加轮询工作流：15 分钟一次的 cron 在私有仓库一个月烧 ~2880 计费分钟，不值。
-- **不要依赖 `GITHUB_TOKEN` 创建的 Release 去触发 `release` 事件**：GitHub 不会为它启动新工作流。
-  `bump.yml` 因此使用 `workflow_dispatch`（该事件允许被 `GITHUB_TOKEN` 触发），并需要 `actions: write`。
-- Release 先以 draft 创建，资产校验通过后才发布；这样构建期间 `releases/latest` 仍指向上一个完整版本。
-  直接在 UI 点 Publish 也安全：`plan` 发现缺资产会先把 Release 转回 draft，构建完在 `finalize` 里重新发布。
-- `release.yml` 幂等：资产已齐时跳过构建，只做校验与发布；`concurrency` 按 tag 串行，重复触发不会并发打包。
-- 打包用 `tauri-apps/tauri-action@v0`，`releaseId` 指向已存在的 Release，`uploadUpdaterJson: true` 生成 `latest.json`；
-  `updaterJsonPreferNsis: true` 确保 Windows 更新指向 NSIS 的 `setup.exe`。
-  `releaseDraft` 必须显式传入当前 draft 状态——它的默认值是 `false`，会把 draft 提前公开。
+- `release.yml` 幂等：资产已齐时 `need_build=false` 跳过整个 build，只做校验与发布；
+  `concurrency` 按 tag 串行，重复发布不会并发打包。
+- 两条入口建出来的都是「已发布但还没有资产」的 Release，`plan` 会先把它转回 draft，
+  资产齐了才重新发布。因此构建期间 `releases/latest` 仍指向上一个完整版本；中间有几秒
+  「已发布但缺 `latest.json`」的窗口，客户端最多报一次检查失败，重试即恢复。
+- 打包用 `tauri-apps/tauri-action@v0`，`releaseId` 指向已存在的 Release，
+  `uploadUpdaterJson: true` 生成 `latest.json`，`updaterJsonPreferNsis: true` 确保 Windows
+  更新指向 NSIS 的 `setup.exe`。`releaseDraft` 必须显式传入当前 draft 状态——它默认 `false`，
+  会把 draft 提前公开。
 - `latest.json` 的 `platforms["windows-x86_64"]` 指向 `setup.exe` 资产本身（不是 zip），
   客户端 `tauri-plugin-updater` 能直接识别 exe 并以 NSIS 参数运行。
 - `finalize` 没有源码需求但会大量调用 `gh`。`gh` 在无 `-R`/`GH_REPO` 时会退回到本地 git 检测仓库，
-  因此 `finalize` 先 `actions/checkout@v4` 建立 `.git` 与 origin，所有 `gh release` 命令都显式传 `-R "$REPO"`，
-  从根上避免 `failed to run git: not a git repository`。
-- 发布流程的细节与故障排查见 [RELEASE.md](RELEASE.md)。
+  因此 `finalize` 先 `actions/checkout@v4` 建立 `.git` 与 origin，所有 `gh release` 命令都显式传
+  `-R "$REPO"`，从根上避免 `failed to run git: not a git repository`。
+- 面向维护者的操作步骤见 [RELEASE.md](RELEASE.md)。
 
 ### 应用内更新
 

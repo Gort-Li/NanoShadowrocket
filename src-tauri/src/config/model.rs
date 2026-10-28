@@ -221,6 +221,8 @@ pub struct AppConfig {
     /// 同时写入用户级代理环境变量，覆盖不读系统代理的命令行工具。
     pub proxy_env: bool,
     pub launch_at_startup: bool,
+    /// 开机自启（`--hidden` 静默启动）后是否自动开启代理。
+    pub auto_start_proxy: bool,
     /// `"system"` 表示跟随系统 DNS，其余为 DoH 端点。
     pub dns_server: String,
     pub ipv6: bool,
@@ -253,6 +255,7 @@ impl Default for AppConfig {
             system_proxy: true,
             proxy_env: true,
             launch_at_startup: true,
+            auto_start_proxy: true,
             dns_server: "system".into(),
             ipv6: true,
             nodes: Vec::new(),
@@ -289,6 +292,7 @@ impl AppConfig {
             system_proxy: self.system_proxy,
             proxy_env: self.proxy_env,
             launch_at_startup: self.launch_at_startup,
+            auto_start_proxy: self.auto_start_proxy,
             dns_server: self.dns_server.clone(),
             ipv6: self.ipv6,
             selected_node: self.selected().map(|n| n.id.clone()),
@@ -308,6 +312,7 @@ pub struct ConfigSummary {
     pub system_proxy: bool,
     pub proxy_env: bool,
     pub launch_at_startup: bool,
+    pub auto_start_proxy: bool,
     pub dns_server: String,
     pub ipv6: bool,
     pub selected_node: Option<String>,
@@ -343,6 +348,7 @@ mod tests {
         assert!(cfg.ipv6);
         // 缺失字段回落到 Default。
         assert!(cfg.proxy_env);
+        assert!(cfg.auto_start_proxy);
         assert!(!cfg.env_dirty);
         assert!(cfg.env_snapshot.is_none());
         // 默认包含一条远程订阅规则。

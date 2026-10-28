@@ -189,6 +189,16 @@ impl AppState {
         self.rules_summary()
     }
 
+    /// 在阻塞线程池里重编译规则集。
+    ///
+    /// 真实订阅动辄 9 万条规则、单次编译约 0.4 秒；Tauri 的同步命令跑在主线程上，
+    /// 直接调用 [`Self::reload_rules`] 会让界面卡住。规则热替换一律走这里。
+    pub async fn reload_rules_async(self: Arc<Self>) -> Result<RulesSummary, AppError> {
+        tokio::task::spawn_blocking(move || self.reload_rules())
+            .await
+            .map_err(|err| AppError::Internal(format!("重新编译规则失败：{err}")))
+    }
+
     pub fn status_sync(&self) -> ProxyStatus {
         let cfg = self.config.snapshot();
         let ruleset = self.router.get().rules().clone();
@@ -510,7 +520,18 @@ impl AppState {
         let client = rules::build_client()?;
         let outcome = rules::update_source(&client, &self.config, &self.rules_dir, id).await?;
         if outcome.changed {
-            self.reload_rules();
+            // 重编译要 0.4 秒以上，放在阻塞线程池里做：tokio worker 被占住会拖慢
+            // 所有正在转发字节的连接，而不只是这次订阅更新。
+            let cfg = self.config.snapshot();
+            let dir = self.rules_dir.clone();
+            let router = self.router.clone();
+            if let Err(err) = tokio::task::spawn_blocking(move || {
+                router.replace(build_router(&cfg, &dir));
+            })
+            .await
+            {
+                log::warn!("远程规则更新后重编译失败：{err}");
+            }
         }
         Ok(outcome)
     }
@@ -633,6 +654,24 @@ mod tests {
                 .decide(&crate::proxy::Target::parse("unmatched.example.com", 443)),
         );
         assert_eq!(decision.policy, Policy::Direct);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn reload_rules_async_applies_changes() {
+        let (state, dir) = temp_state("async-reload");
+        state
+            .update_config(|c| c.default_policy = Policy::Direct)
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let summary = runtime
+            .block_on(Arc::new(state).reload_rules_async())
+            .unwrap();
+        assert_eq!(summary.default_policy, Policy::Direct);
+        assert!(summary.total > 1);
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -28,7 +28,7 @@ fn default_interval() -> u32 {
 }
 
 #[tauri::command]
-pub fn save_custom_rules(
+pub async fn save_custom_rules(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     text: String,
@@ -37,7 +37,7 @@ pub fn save_custom_rules(
         return Err(AppError::invalid("自定义规则超过 2MB，请拆分为远程订阅"));
     }
     state.update_config(|cfg| cfg.custom_rules = text)?;
-    let summary = state.reload_rules();
+    let summary = state.inner().clone().reload_rules_async().await?;
     crate::events::rules(&app, &summary);
     Ok(summary)
 }
@@ -115,7 +115,7 @@ pub async fn update_all_remote_rules(
 }
 
 #[tauri::command]
-pub fn remove_remote_rule(
+pub async fn remove_remote_rule(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
@@ -124,7 +124,7 @@ pub fn remove_remote_rule(
     if let Ok(path) = crate::rules::cache_path(&state.rules_dir, &id) {
         let _ = std::fs::remove_file(path);
     }
-    let summary = state.reload_rules();
+    let summary = state.inner().clone().reload_rules_async().await?;
     crate::events::rules(&app, &summary);
     Ok(summary)
 }
@@ -150,7 +150,7 @@ pub fn set_remote_interval(
 }
 
 #[tauri::command]
-pub fn set_remote_enabled(
+pub async fn set_remote_enabled(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
@@ -161,14 +161,14 @@ pub fn set_remote_enabled(
             entry.enabled = enabled;
         }
     })?;
-    let summary = state.reload_rules();
+    let summary = state.inner().clone().reload_rules_async().await?;
     crate::events::rules(&app, &summary);
     Ok(summary)
 }
 
 /// 按前端给出的顺序重排订阅；未列出的保持原相对顺序。
 #[tauri::command]
-pub fn reorder_remote_rules(
+pub async fn reorder_remote_rules(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     ids: Vec<String>,
@@ -187,7 +187,7 @@ pub fn reorder_remote_rules(
         }
         cfg.remote_rules = ordered;
     })?;
-    let summary = state.reload_rules();
+    let summary = state.inner().clone().reload_rules_async().await?;
     crate::events::rules(&app, &summary);
     Ok(summary)
 }

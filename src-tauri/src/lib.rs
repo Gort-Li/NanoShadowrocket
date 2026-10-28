@@ -52,14 +52,17 @@ pub fn run() {
             app.manage(state.clone());
 
             setup_tray(app)?;
-            spawn_traffic(app.handle().clone(), state.clone());
-            spawn_remote_scheduler(app.handle().clone(), state);
+            let handle = app.handle().clone();
+            spawn_traffic(handle.clone(), state.clone());
+            spawn_remote_scheduler(handle.clone(), state.clone());
 
-            // 开机自启（`--hidden`）时静谧化：只驻留托盘与后台任务，不弹出主窗口。
+            // 主窗口在配置里就是 `visible: false`，由这里决定是否显示：
+            // 开机自启（`--hidden`）时永不显示（避免开机瞬间闪一个空窗口），
+            // 只驻留托盘与后台任务；正常启动才显示。
             if is_silent_start() {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                }
+                spawn_silent_autostart(handle, state);
+            } else {
+                show_main(&handle);
             }
 
             Ok(())
@@ -173,6 +176,36 @@ fn config_dir() -> Option<std::path::PathBuf> {
 /// 是否以开机自启的静默形态启动（命令行携带 `--hidden`）。
 fn is_silent_start() -> bool {
     std::env::args().any(|arg| arg == SILENT_FLAG)
+}
+
+/// 开机自启静默启动时按配置自动拉起代理。
+///
+/// 开机阶段网络栈与磁盘可能尚未就绪，失败后按退避重试几轮；
+/// 整个过程不弹窗、不打断用户，失败只写日志。
+const AUTOSTART_DELAYS: [u64; 3] = [2, 10, 30];
+
+fn spawn_silent_autostart(app: AppHandle, state: Arc<AppState>) {
+    let (auto, has_node) = state
+        .config
+        .with(|cfg| (cfg.auto_start_proxy, cfg.selected().is_some()));
+    if !auto || !has_node {
+        log::info!("开机自启：仅驻留托盘，未配置自动连接");
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        for delay in AUTOSTART_DELAYS {
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+            match state.start().await {
+                Ok(status) => {
+                    log::info!("开机自启：已自动开启代理，端口 {}", status.local_port);
+                    events::proxy(&app, &status);
+                    return;
+                }
+                Err(err) => log::warn!("开机自启自动开启代理失败（延迟 {delay}s 后重试）：{err}"),
+            }
+        }
+    });
 }
 
 fn show_main(app: &AppHandle) {

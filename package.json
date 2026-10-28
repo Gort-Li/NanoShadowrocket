@@ -16,7 +16,8 @@
     "tauri": "tauri",
     "prepare:sidecar": "bun scripts/fetch-v2ray.mjs",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "release": "bun scripts/release.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",

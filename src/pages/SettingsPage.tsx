@@ -35,6 +35,7 @@ function fromConfig(config: AppConfig): SettingsInput {
     systemProxy: config.systemProxy,
     proxyEnv: config.proxyEnv,
     launchAtStartup: config.launchAtStartup,
+    autoStartProxy: config.autoStartProxy,
     dnsServer: config.dnsServer,
     ipv6: config.ipv6,
   };
@@ -248,6 +249,21 @@ export default function SettingsPage() {
               checked={draft.launchAtStartup}
               label="开机自动启动"
               onChange={(next) => applyNow({ launchAtStartup: next })}
+            />
+          </SettingRow>
+          <SettingRow
+            label="开机后自动连接"
+            description={
+              draft.launchAtStartup
+                ? "开机自启时静默驻留托盘，并自动开启上次使用的节点"
+                : "需先开启「开机自动启动」，该项才会生效"
+            }
+          >
+            <Switch
+              checked={draft.autoStartProxy}
+              label="开机后自动连接"
+              disabled={!draft.launchAtStartup}
+              onChange={(next) => applyNow({ autoStartProxy: next })}
             />
           </SettingRow>
           <SettingRow

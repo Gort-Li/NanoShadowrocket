@@ -47,6 +47,15 @@ function toast(message: string, kind: "ok" | "error" | "info" = "info") {
   useAppStore.getState().toast(message, kind);
 }
 
+/**
+ * 自定义规则保存串行化。
+ *
+ * 以前并发保存会被 `if (saving) return` 直接丢掉：本地文本已经改了、后端还是旧的，
+ * 表现为「规则点了没生效」。现在按点击顺序排队，最后一次写入一定是最终文本。
+ */
+let saveChain: Promise<void> = Promise.resolve();
+let pendingSaves = 0;
+
 export const useRuleStore = create<RuleStore>((set, get) => ({
   custom: "",
   remotes: [],
@@ -90,18 +99,23 @@ export const useRuleStore = create<RuleStore>((set, get) => ({
       toast(`${success}（预览模式）`, "ok");
       return;
     }
-    if (get().saving) return;
+    pendingSaves += 1;
     set({ saving: true });
-    try {
-      const summary = await invoke<RulesSummary>("save_custom_rules", { text });
-      set({ summary });
-      useAppStore.getState().applyRules(summary);
-      toast(success, "ok");
-    } catch (err) {
-      toast(errorMessage(err), "error");
-    } finally {
-      set({ saving: false });
-    }
+    const task = saveChain.then(async () => {
+      try {
+        const summary = await invoke<RulesSummary>("save_custom_rules", { text });
+        set({ summary });
+        useAppStore.getState().applyRules(summary);
+        toast(success, "ok");
+      } catch (err) {
+        toast(errorMessage(err), "error");
+      } finally {
+        pendingSaves -= 1;
+        if (pendingSaves === 0) set({ saving: false });
+      }
+    });
+    saveChain = task;
+    await task;
   },
 
   applyQuickRule: async (rule) => {
@@ -109,7 +123,10 @@ export const useRuleStore = create<RuleStore>((set, get) => ({
     const next = upsertCustomRule(parsed.rules, rule);
     const text = serializeCustomRules(next, parsed.unsupported);
     const target = rule.kind === "FINAL" ? "FINAL" : `${rule.kind},${rule.value}`;
-    await get().saveCustomText(text, `已配置 ${target} → ${POLICY_LABEL[rule.policy]}`);
+    await get().saveCustomText(
+      text,
+      `已写入 ${target} → ${POLICY_LABEL[rule.policy]}，新连接立即生效`
+    );
   },
 
   addRemote: async (name, url, intervalHours) => {

@@ -25,6 +25,7 @@ pub struct SettingsInput {
     pub system_proxy: bool,
     pub proxy_env: bool,
     pub launch_at_startup: bool,
+    pub auto_start_proxy: bool,
     pub dns_server: String,
     pub ipv6: bool,
 }
@@ -122,10 +123,12 @@ pub async fn update_settings(
         cfg.system_proxy = input.system_proxy;
         cfg.proxy_env = input.proxy_env;
         cfg.launch_at_startup = input.launch_at_startup;
+        cfg.auto_start_proxy = input.auto_start_proxy;
         cfg.dns_server = input.dns_server.trim().to_string();
         cfg.ipv6 = input.ipv6;
     })?;
-    state.reload_rules();
+    // 默认策略 / DNS / IPv6 只影响路由，热替换后新连接立刻按新设置走。
+    state.inner().clone().reload_rules_async().await?;
 
     let status = if needs_restart {
         state.start().await?
@@ -139,7 +142,7 @@ pub async fn update_settings(
 
 /// 清空远程规则缓存与条件请求标记，不影响订阅本身。
 #[tauri::command]
-pub fn clear_rule_cache(
+pub async fn clear_rule_cache(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<RulesSummary, AppError> {
@@ -159,7 +162,7 @@ pub fn clear_rule_cache(
         }
     })?;
 
-    let summary = state.reload_rules();
+    let summary = state.inner().clone().reload_rules_async().await?;
     events::rules(&app, &summary);
     Ok(summary)
 }
@@ -176,7 +179,7 @@ pub async fn reset_config(
         .map_err(|e| AppError::Io(format!("重建规则目录失败：{e}")))?;
 
     state.update_config(|cfg| *cfg = crate::config::AppConfig::default())?;
-    state.reload_rules();
+    state.inner().clone().reload_rules_async().await?;
 
     let status = state.status().await;
     events::proxy(&app, &status);
