@@ -6,7 +6,6 @@ import {
   closeWindow,
   isTauri,
   minimizeWindow,
-  startDragging,
   toggleMaximizeWindow,
 } from "../lib/tauri";
 
@@ -62,17 +61,15 @@ export default function TitleBar() {
   }, []);
 
   return (
+    // 拖动只交给 `data-tauri-drag-region`：Tauri 2.12 的 drag.js 会在 document 上
+    // 处理 mousedown → start_dragging，并顺带支持双击最大化、自动跳过按钮等可点击元素。
+    // 不要再加 onMouseDown → startDragging()：那会二次调用 start_dragging，
+    // 而 tao 的实现里有 ReleaseCapture()，第二次会打断正在进行的那次拖动（表现为偶发拖不动）。
     <header
       data-tauri-drag-region
-      onMouseDown={(e) => {
-        // WebView2 不支持 -webkit-app-region，交给 Tauri 处理拖拽
-        if (e.button !== 0) return;
-        if ((e.target as HTMLElement).closest("button")) return;
-        void startDragging();
-      }}
       className="relative z-40 flex h-[38px] shrink-0 items-center justify-between border-b border-hairline bg-[#0D1015]/90 backdrop-blur-xl"
     >
-      <div data-tauri-drag-region className="pointer-events-none flex items-center gap-2.5 pl-3.5">
+      <div className="pointer-events-none flex items-center gap-2.5 pl-3.5">
         <div className="grid h-[18px] w-[18px] place-items-center rounded-[6px] bg-gradient-to-br from-accent to-[#5AC8FA] shadow-[0_0_12px_rgba(10,132,255,0.55)]">
           <svg viewBox="0 0 24 24" className="h-3 w-3 text-white" fill="currentColor">
             <path d="M13 2 4.5 13.5H10l-1 8.5 9-12h-5.5L13 2Z" />

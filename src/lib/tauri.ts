@@ -118,8 +118,3 @@ export async function closeWindow(): Promise<void> {
   if (!isTauri) return;
   await (await currentWindow()).close();
 }
-
-export async function startDragging(): Promise<void> {
-  if (!isTauri) return;
-  await (await currentWindow()).startDragging();
-}

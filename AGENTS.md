@@ -294,6 +294,13 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
   两者有循环引用，只在函数体内互相调用，不要在模块顶层访问。
 - **预览模式**：`lib/tauri.ts` 用 `__TAURI_INTERNALS__` 判断是否在 Tauri 内。非 Tauri 时 `invoke` 抛
   `AppError("preview")`，`init()` 改用 `lib/mock.ts` 的演示数据（默认已连接），便于浏览器调试与截图。
+- **标题栏拖动**：只用 `data-tauri-drag-region`。Tauri 2.12 的 `drag.js` 已经在 `document` 上接管
+  mousedown（自带双击最大化、自动跳过 `button` 等可点击元素），所以**不要**再写
+  `onMouseDown → startDragging()`：二次调用会走到 tao 的 `handle_os_dragging`，那里的
+  `ReleaseCapture()` 会打断正在进行的那次拖动，表现为偶发「拖不动」。
+- **遮罩会盖住标题栏**：`Sheet`（`z-50`）/ `ConfirmDialog`（`z-60`）的 `fixed inset-0` 遮罩在
+  标题栏（`z-40`）之上，打开期间窗口拖不动是当前的设计选择；要让抽屉打开时也能拖窗口，
+  需要把遮罩改成从标题栏下方开始（只有 38px 的高度差，注意与 `TitleBar` 的 `h-[38px]` 对齐）。
 - **Portal**：`Sheet` / `ConfirmDialog` 必须 `createPortal(..., document.body)`。页面根节点有
   `animate-fade-up`（带 transform），会让子级 `position: fixed` 相对页面而不是视口定位。
 - **路由**：无 react-router，用 `location.hash`（`#/home`、`#/nodes`、`#/rules`、`#/settings`）并监听 `hashchange`。
