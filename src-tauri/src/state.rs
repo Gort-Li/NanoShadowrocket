@@ -23,7 +23,7 @@ use crate::proxy::{
     udp::{DirectUdpOutbound, RejectUdpOutbound, SidecarUdpOutbound, UdpOutbound},
 };
 use crate::rules::{self, build_ruleset, Policy, SourceText};
-use crate::sidecar::V2raySidecar;
+use crate::sidecar::XraySidecar;
 use crate::sysproxy;
 
 const LATENCY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -78,7 +78,7 @@ pub struct Bootstrap {
 
 struct RunningProxy {
     inbound: InboundHandle,
-    sidecar: Option<V2raySidecar>,
+    sidecar: Option<XraySidecar>,
     proxy_applied: bool,
     env_applied: bool,
     port: u16,
@@ -138,7 +138,7 @@ impl AppState {
         }
 
         // 上次崩溃可能留下含 UUID 的 sidecar 配置；单实例下可以安全清理。
-        let _ = std::fs::remove_file(config_dir.join("v2ray-sidecar.json"));
+        let _ = std::fs::remove_file(config_dir.join("xray-sidecar.json"));
 
         let router = build_router(&cfg, &dir);
 
@@ -256,13 +256,13 @@ impl AppState {
                 false
             }
         };
-        // 内置引擎仅能跑 vmess；其余协议一律交给 v2ray-core sidecar。
+        // 内置引擎仅能跑 vmess；其余协议一律交给 Xray-core sidecar。
         let use_native = native_desired && node.protocol == Protocol::Vmess;
 
         let (proxy, proxy_udp, sidecar): (
             Arc<dyn Outbound>,
             Arc<dyn UdpOutbound>,
-            Option<V2raySidecar>,
+            Option<XraySidecar>,
         ) = if use_native {
             let outbound_config = node.outbound_config().map_err(AppError::Unsupported)?;
             (
@@ -271,7 +271,7 @@ impl AppState {
                 None,
             )
         } else {
-            let sidecar = V2raySidecar::start(&node, &self.config_dir).await?;
+            let sidecar = XraySidecar::start(&node, &self.config_dir).await?;
             let socks = sidecar.socks_addr();
             (
                 Arc::new(SidecarOutbound::new(socks)),
@@ -333,7 +333,7 @@ impl AppState {
     /// 停止入站并还原系统代理。重复调用是幂等的。
     pub async fn stop(&self) -> Result<ProxyStatus, AppError> {
         // 整个停止过程持有 runtime 锁，避免并发的 start 写入新的
-        // v2ray-sidecar.json 后被旧 sidecar 的 Drop 删掉。
+        // xray-sidecar.json 后被旧 sidecar 的 Drop 删掉。
         let mut guard = self.runtime.lock().await;
         let Some(running) = guard.take() else {
             return Ok(self.status_sync());
@@ -608,7 +608,7 @@ mod tests {
             getrandom::u64().unwrap()
         ));
         let mut state = AppState::new(&dir).unwrap();
-        // 单测不依赖内置 v2ray 二进制；生产路径在下面的 sidecar 测试里单独覆盖。
+        // 单测不依赖内置 xray 二进制；生产路径在下面的 sidecar 测试里单独覆盖。
         state.native_outbound = true;
         (state, dir)
     }

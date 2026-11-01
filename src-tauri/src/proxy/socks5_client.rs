@@ -1,4 +1,4 @@
-//! 极简 SOCKS5 客户端，只用于连接本机 v2ray-core 的 SOCKS 入站。
+//! 极简 SOCKS5 客户端，只用于连接本机 Xray-core 的 SOCKS 入站。
 //!
 //! 支持 CONNECT 与 UDP ASSOCIATE；不做认证，不处理 BIND。
 
@@ -18,7 +18,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
 pub async fn connect(proxy: SocketAddr, target: &Target) -> Result<TcpStream, ProxyError> {
     let mut stream = TcpStream::connect(proxy)
         .await
-        .map_err(|e| ProxyError::Sidecar(format!("连接本地 v2ray 内核失败（{proxy}）：{e}")))?;
+        .map_err(|e| ProxyError::Sidecar(format!("连接本地 xray 内核失败（{proxy}）：{e}")))?;
     let _ = stream.set_nodelay(true);
 
     timeout(HANDSHAKE_TIMEOUT, async {
@@ -28,7 +28,7 @@ pub async fn connect(proxy: SocketAddr, target: &Target) -> Result<TcpStream, Pr
         Ok::<(), ProxyError>(())
     })
     .await
-    .map_err(|_| ProxyError::Sidecar("本地 v2ray 内核握手超时".into()))??;
+    .map_err(|_| ProxyError::Sidecar("本地 xray 内核握手超时".into()))??;
 
     Ok(stream)
 }
@@ -37,7 +37,7 @@ pub async fn connect(proxy: SocketAddr, target: &Target) -> Result<TcpStream, Pr
 pub async fn udp_associate(proxy: SocketAddr) -> Result<(TcpStream, SocketAddr), ProxyError> {
     let mut stream = TcpStream::connect(proxy)
         .await
-        .map_err(|e| ProxyError::Sidecar(format!("连接本地 v2ray 内核失败（{proxy}）：{e}")))?;
+        .map_err(|e| ProxyError::Sidecar(format!("连接本地 xray 内核失败（{proxy}）：{e}")))?;
     let _ = stream.set_nodelay(true);
 
     let relay = timeout(HANDSHAKE_TIMEOUT, async {
@@ -47,9 +47,9 @@ pub async fn udp_associate(proxy: SocketAddr) -> Result<(TcpStream, SocketAddr),
         read_reply(&mut stream).await
     })
     .await
-    .map_err(|_| ProxyError::Sidecar("本地 v2ray 内核 UDP 握手超时".into()))??;
+    .map_err(|_| ProxyError::Sidecar("本地 xray 内核 UDP 握手超时".into()))??;
 
-    // v2ray-core 通常返回 127.0.0.1:port；如果返回 0.0.0.0，则用代理地址补全。
+    // Xray-core 通常返回 127.0.0.1:port；如果返回 0.0.0.0，则用代理地址补全。
     let relay = if relay.ip().is_unspecified() {
         SocketAddr::new(proxy.ip(), relay.port())
     } else {
@@ -70,7 +70,7 @@ async fn negotiate(stream: &mut TcpStream) -> Result<(), ProxyError> {
         .map_err(|e| ProxyError::Sidecar(format!("读取 SOCKS 握手失败：{e}")))?;
     if reply != [0x05, 0x00] {
         return Err(ProxyError::Sidecar(format!(
-            "本地 v2ray 内核不接受 no-auth（{reply:?}）"
+            "本地 xray 内核不接受 no-auth（{reply:?}）"
         )));
     }
     Ok(())

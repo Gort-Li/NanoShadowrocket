@@ -101,8 +101,8 @@ bun run release --yes            # 跳过确认
 | 构建报 `No updater private key password provided` | 密钥无密码时的正常提示；有密码就检查 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 | 工作流卡在「校验更新清单」 | `latest.json` 缺失、版本与 tag 不一致或指向的资产没传上去，看 tauri-action 日志 |
 | 客户端下载后校验签名失败 | 私钥与 `pubkey` 不配对，确认用的是最初那把 |
-| 构建报 `sidecar_error` / 找不到 `v2ray.exe` | 工作流里 `prepare:sidecar` 失败，看该步骤日志；本地可先跑 `bun run prepare:sidecar` 复现 |
-| `prepare:sidecar` 报 SHA256 不匹配 | 下载被代理或镜像篡改，删掉 `src-tauri/binaries/.v2ray-windows-64.zip` 后重试 |
+| 构建报 `sidecar_error` / 找不到 `xray.exe` | 工作流里 `prepare:sidecar` 失败，看该步骤日志；本地可先跑 `bun run prepare:sidecar` 复现 |
+| `prepare:sidecar` 报 SHA256 不匹配 | 下载被代理或镜像篡改，删掉 `src-tauri/binaries/.xray-windows-64.zip` 后重试 |
 | 推送失败（`main` 被保护） | 把仓库管理员加进允许推送的白名单，或临时取消保护 |
 | 想手动验证打包结果 | 本机 `bun run tauri build`（需要设置 `TAURI_SIGNING_PRIVATE_KEY`，见 README「从源码构建」） |
 

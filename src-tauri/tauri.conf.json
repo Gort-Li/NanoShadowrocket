@@ -46,8 +46,8 @@
     "active": true,
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/v2ray"],
-    "resources": ["resources/v2ray-LICENSE.txt"],
+    "externalBin": ["binaries/xray"],
+    "resources": ["resources/xray-LICENSE.txt"],
     "windows": {
       "nsis": {
         "installerHooks": "./windows/nsis-hooks.nsh"

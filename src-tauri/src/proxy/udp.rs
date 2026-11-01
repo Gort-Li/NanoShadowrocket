@@ -100,7 +100,7 @@ impl UdpFlow for DirectUdpFlow {
     }
 }
 
-/// 通过本地 v2ray-core 的 SOCKS UDP 中继转发。
+/// 通过本地 Xray-core 的 SOCKS UDP 中继转发。
 pub struct SidecarUdpOutbound {
     proxy: SocketAddr,
 }
@@ -129,7 +129,7 @@ impl UdpOutbound for SidecarUdpOutbound {
 }
 
 struct SidecarUdpFlow {
-    /// 必须保持打开，v2ray-core 收到 EOF 后会销毁 UDP 关联。
+    /// 必须保持打开，Xray-core 收到 EOF 后会销毁 UDP 关联。
     _control: TcpStream,
     socket: UdpSocket,
     relay: SocketAddr,

@@ -11,7 +11,7 @@ pub enum ProxyError {
     Rejected,
     #[error("不支持的配置：{0}")]
     Unsupported(String),
-    #[error("内置 v2ray 内核不可用：{0}")]
+    #[error("内置 xray 内核不可用：{0}")]
     Sidecar(String),
 }
 

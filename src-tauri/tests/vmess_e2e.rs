@@ -1,8 +1,8 @@
 //! 真实互操作验证（默认跳过）。
 //!
-//! 需要一个本地运行的官方 v2ray-core 作为服务端：
+//! 需要一个本地运行的官方 Xray-core 作为服务端：
 //! ```text
-//! v2ray run -c server.json      # vmess 入站 127.0.0.1:10086，id = b831381d-...，alterId = 0
+//! xray run -c server.json       # vmess 入站 127.0.0.1:10086，id = b831381d-...，alterId = 0
 //! python -m http.server 18080 --bind 127.0.0.1 --directory www
 //! www/nano.txt = "NANO-VMESS-OK"，www/big.bin = 128KB 随机数据
 //! ```
@@ -57,7 +57,7 @@ async fn http_get(method: CipherMethod, target: Target, path: &str) -> Vec<u8> {
 }
 
 #[tokio::test]
-#[ignore = "需要本地 v2ray-core 服务端（见文件头说明）"]
+#[ignore = "需要本地 Xray-core 服务端（见文件头说明）"]
 async fn handshake_aes() {
     let response = http_get(
         CipherMethod::Aes128Gcm,
@@ -70,7 +70,7 @@ async fn handshake_aes() {
 }
 
 #[tokio::test]
-#[ignore = "需要本地 v2ray-core 服务端（见文件头说明）"]
+#[ignore = "需要本地 Xray-core 服务端（见文件头说明）"]
 async fn handshake_chacha_and_domain_target() {
     let response = http_get(
         CipherMethod::ChaCha20Poly1305,
@@ -83,7 +83,7 @@ async fn handshake_chacha_and_domain_target() {
 }
 
 #[tokio::test]
-#[ignore = "需要本地 v2ray-core 服务端（见文件头说明）"]
+#[ignore = "需要本地 Xray-core 服务端（见文件头说明）"]
 async fn streams_large_payload_in_multiple_chunks() {
     let response = http_get(
         CipherMethod::Aes128Gcm,

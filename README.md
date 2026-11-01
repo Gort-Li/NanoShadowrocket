@@ -4,7 +4,7 @@
 
 **极轻量的 Windows 代理客户端，交互与视觉对标 Shadowrocket。**
 
-没有驱动、没有 TUN、没有后台服务；VMess 由随安装包分发的 v2ray-core sidecar 处理，双击就能让流量按规则走。
+没有驱动、没有 TUN、没有后台服务；VMess / VLESS 由随安装包分发的 Xray-core sidecar 处理，双击就能让流量按规则走。
 
 ![Tauri](https://img.shields.io/badge/Tauri-2.12-24C8DB?logo=tauri&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-1.90+-DEA584?logo=rust&logoColor=white)
@@ -67,7 +67,7 @@ bun run tauri:build
 ```
 
 安装包输出在 `src-tauri/target/release/bundle/nsis/`。首次编译约 8-10 分钟，之后增量打包约 1-2 分钟。
-构建前会自动运行 `bun run prepare:sidecar`，下载并校验 v2ray-core `v5.53.0`（约 19MB 压缩包）；安装包因此比早期版本大约 15-20MB。
+构建前会自动运行 `bun run prepare:sidecar`，下载并校验 Xray-core `v26.10.31`（约 19MB 压缩包）；安装包因此比早期版本大约 15-20MB。
 
 > 打包会同时产出应用内更新用的签名包，因此需要先设置签名密钥 `TAURI_SIGNING_PRIVATE_KEY`（见 [RELEASE.md](RELEASE.md)）；只跑 `bun run tauri:dev` 做日常开发则不需要。
 
@@ -180,11 +180,11 @@ FINAL,Proxy
 
 **支持旧版 alterId / UDP 吗？**
 
-支持。所有 VMess 节点都通过内置的 v2ray-core sidecar 出站：`alterId = 0` 使用 AEAD，`alterId > 0` 使用旧版 VMess 请求头；SOCKS5 `UDP ASSOCIATE` 会按节点上的「UDP 转发」开关放行。旧链接里的 `aes-128-cfb` / `aes-256-cfb` 会显示为 `legacy`；v2ray-core 的 JSON 配置没有单独的 CFB 选项，客户端会按 `auto` 选择 AES-GCM / ChaCha20-Poly1305 作为 body 加密，服务端按请求头里的安全类型解密。
+支持。所有 VMess 节点都通过内置的 Xray-core sidecar 出站：`alterId = 0` 使用 AEAD，`alterId > 0` 使用旧版 VMess 请求头；SOCKS5 `UDP ASSOCIATE` 会按节点上的「UDP 转发」开关放行。旧链接里的 `aes-128-cfb` / `aes-256-cfb` 会显示为 `legacy`；Xray-core 的 JSON 配置没有单独的 CFB 选项，客户端会按 `auto` 选择 AES-GCM / ChaCha20-Poly1305 作为 body 加密，服务端按请求头里的安全类型解密。VLESS + REALITY（`xtls-rprx-vision` flow）同样经 sidecar 出站。
 
 **支持 ws / tls / grpc 节点吗？**
 
-暂不支持，当前只开放 VMess + TCP。导入时会明确提示，不会静默失败。v2ray-core 本身具备这些能力，后续会在节点模型与 sidecar 配置里补齐。
+暂不支持，当前只开放 VMess + TCP。导入时会明确提示，不会静默失败。Xray-core 本身具备这些能力，后续会在节点模型与 sidecar 配置里补齐。
 
 **配置存在哪？怎么彻底重置？**
 
@@ -200,4 +200,4 @@ FINAL,Proxy
 
 ## 许可证
 
-[MIT](LICENSE)。安装包内含未修改的 [v2ray-core](https://github.com/v2fly/v2ray-core) v5.53.0，按其 MIT 许可证分发，完整声明见 `src-tauri/resources/v2ray-LICENSE.txt`。
+[MIT](LICENSE)。安装包内含未修改的 [Xray-core](https://github.com/XTLS/Xray-core) v26.10.31，按其 MIT 许可证分发，完整声明见 `src-tauri/resources/xray-LICENSE.txt`。

@@ -41,7 +41,7 @@ pub enum AppError {
     #[error("{0}")]
     Unsupported(String),
 
-    #[error("内置 v2ray 内核错误：{0}")]
+    #[error("内置 xray 内核错误：{0}")]
     Sidecar(String),
 
     #[error("网络错误：{0}")]

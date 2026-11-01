@@ -1,4 +1,4 @@
-//! 按节点生成 v2ray-core 的最小配置：一个本地 SOCKS 入站 + 一个按协议生成的出站。
+//! 按节点生成 Xray-core 的最小配置：一个本地 SOCKS 入站 + 一个按协议生成的出站。
 //!
 //! 入站同时开启 UDP，因此 TCP 走 SOCKS CONNECT、UDP 走 SOCKS UDP ASSOCIATE。
 //! 路由、统计和系统代理仍由 NanoShadowrocket 自己负责。
@@ -12,7 +12,7 @@ fn security_name(method: CipherMethod) -> &'static str {
     match method {
         CipherMethod::Aes128Gcm => "aes-128-gcm",
         CipherMethod::ChaCha20Poly1305 => "chacha20-poly1305",
-        // v2ray-core 的 JSON 配置没有 "legacy" 选项；alterId > 0 时它会自动
+        // Xray-core 的 JSON 配置没有 "legacy" 选项；alterId > 0 时它会自动
         // 使用 legacy 请求头，而 body 继续走 auto。
         CipherMethod::Legacy => "auto",
     }
@@ -183,6 +183,7 @@ mod tests {
     fn vless_tcp_reality() {
         let mut node = vmess_node();
         node.protocol = Protocol::Vless;
+        node.flow = Some("xtls-rprx-vision".into());
         node.tls = Some(crate::config::model::NodeTls {
             enabled: true,
             server_name: Some("www.microsoft.com".into()),
@@ -196,6 +197,7 @@ mod tests {
         assert_eq!(value["outbounds"][0]["protocol"], "vless");
         let user = &value["outbounds"][0]["settings"]["vnext"][0]["users"][0];
         assert_eq!(user["encryption"], "none");
+        assert_eq!(user["flow"], "xtls-rprx-vision");
         assert!(user.get("alterId").is_none());
         let stream = &value["outbounds"][0]["streamSettings"];
         assert_eq!(stream["security"], "reality");

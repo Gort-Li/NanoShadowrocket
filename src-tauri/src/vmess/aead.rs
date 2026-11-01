@@ -186,7 +186,7 @@ impl BodyCipher {
             }
             CipherMethod::Legacy => {
                 return Err(VmessError::Unsupported(
-                    "legacy 加密仅由内置 v2ray 内核处理".into(),
+                    "legacy 加密仅由内置 xray 内核处理".into(),
                 ))
             }
         })

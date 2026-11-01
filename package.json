@@ -14,7 +14,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "prepare:sidecar": "bun scripts/fetch-v2ray.mjs",
+    "prepare:sidecar": "bun scripts/fetch-xray.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "release": "bun scripts/release.mjs"

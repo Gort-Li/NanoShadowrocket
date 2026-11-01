@@ -95,7 +95,7 @@ impl Outbound for VmessOutbound {
     }
 }
 
-/// 通过本地 v2ray-core 的 SOCKS 入站建立 TCP 连接。
+/// 通过本地 Xray-core 的 SOCKS 入站建立 TCP 连接。
 #[derive(Debug, Clone, Copy)]
 pub struct SidecarOutbound {
     proxy: std::net::SocketAddr,

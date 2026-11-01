@@ -118,7 +118,7 @@ jobs:
       - name: 安装前端依赖
         run: bun install --frozen-lockfile
 
-      - name: 准备 v2ray sidecar
+      - name: 准备 xray sidecar
         run: bun run prepare:sidecar
 
       - name: 同步版本号

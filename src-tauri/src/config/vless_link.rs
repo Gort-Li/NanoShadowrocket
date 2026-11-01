@@ -298,4 +298,30 @@ mod tests {
         assert!(parse_vless("vmess://x").is_err());
         assert!(parse_vless("vless://!!!").is_err());
     }
+
+    #[test]
+    fn parses_reality_vision_realworld() {
+        let link = "vless://17288d4a-08ba-4823-8448-bd3aa4f3a0cf@161.33.40.73:8888?encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SpHuprz2n5byO1K8SoWKXJMqsOl1wHA5Qo_JgWKg7yc&security=reality&sid=1fc6&sni=staticview.microsoft.com&spx=%2F69b2fbfff40883e&support-x25519mlkem768=true&type=tcp#Oracle-Reality-gort";
+        let parsed = parse_vless(link).expect("should parse reality+vision link");
+        assert_eq!(parsed.node.protocol, Protocol::Vless);
+        assert_eq!(parsed.node.transport, Transport::Tcp);
+        assert_eq!(parsed.node.config.host, "161.33.40.73");
+        assert_eq!(parsed.node.config.port, 8888);
+        assert_eq!(
+            parsed.node.config.uuid,
+            "17288d4a-08ba-4823-8448-bd3aa4f3a0cf"
+        );
+        assert_eq!(parsed.node.flow.as_deref(), Some("xtls-rprx-vision"));
+        assert_eq!(parsed.node.name, "Oracle-Reality-gort");
+        let tls = parsed.node.tls.as_ref().expect("reality TLS expected");
+        assert!(tls.reality());
+        assert_eq!(
+            tls.reality_public_key.as_deref(),
+            Some("SpHuprz2n5byO1K8SoWKXJMqsOl1wHA5Qo_JgWKg7yc")
+        );
+        assert_eq!(tls.reality_short_id.as_deref(), Some("1fc6"));
+        assert_eq!(tls.reality_spider_x.as_deref(), Some("/69b2fbfff40883e"));
+        assert_eq!(tls.server_name.as_deref(), Some("staticview.microsoft.com"));
+        assert_eq!(tls.fingerprint.as_deref(), Some("chrome"));
+    }
 }

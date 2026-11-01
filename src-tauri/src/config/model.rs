@@ -54,7 +54,7 @@ impl Transport {
     }
 }
 
-/// 出站协议。运行时转发一律交由 v2ray-core sidecar 负责，本枚举只用于
+/// 出站协议。运行时转发一律交由 Xray-core sidecar 负责，本枚举只用于
 /// 上层建模与侧车配置生成，因此新增协议只需扩展枚举与解析器。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

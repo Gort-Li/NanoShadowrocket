@@ -1,6 +1,6 @@
-//! 内置 v2ray-core sidecar 的真实互操作测试（默认跳过）。
+//! 内置 Xray-core sidecar 的真实互操作测试（默认跳过）。
 //!
-//! 会自行拉起一个本地 v2ray-core 服务端（alterId = 64），验证：
+//! 会自行拉起一个本地 Xray-core 服务端（alterId = 64），验证：
 //! 1. legacy VMess 请求头可以完成 TCP 转发；
 //! 2. SOCKS5 UDP ASSOCIATE 可以完成 UDP 往返。
 //!
@@ -18,7 +18,7 @@ use app_lib::proxy::{
     UdpOutbound,
 };
 use app_lib::rules::Policy;
-use app_lib::sidecar::V2raySidecar;
+use app_lib::sidecar::XraySidecar;
 use app_lib::state::AppState;
 use app_lib::vmess::{CipherMethod, VmessConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,7 +43,7 @@ impl Drop for Server {
 fn binary() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("binaries")
-        .join("v2ray-x86_64-pc-windows-msvc.exe")
+        .join("xray-x86_64-pc-windows-msvc.exe")
 }
 
 async fn free_port() -> u16 {
@@ -81,7 +81,7 @@ async fn start_server(alter_id: u16) -> (Server, u16) {
 }}"#
     );
     let config_path = std::env::temp_dir().join(format!(
-        "nano-v2ray-server-{}-{port}.json",
+        "nano-xray-server-{}-{port}.json",
         std::process::id()
     ));
     std::fs::write(&config_path, config).unwrap();
@@ -100,13 +100,13 @@ async fn start_server(alter_id: u16) -> (Server, u16) {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
-    let mut child = command.spawn().expect("启动 v2ray 服务端失败");
+    let mut child = command.spawn().expect("启动 xray 服务端失败");
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     loop {
         if let Ok(Some(status)) = child.try_wait() {
             let _ = std::fs::remove_file(&config_path);
-            panic!("v2ray 服务端提前退出：{status}");
+            panic!("xray 服务端提前退出：{status}");
         }
         if tokio::time::timeout(
             Duration::from_millis(200),
@@ -121,7 +121,7 @@ async fn start_server(alter_id: u16) -> (Server, u16) {
             let _ = child.kill();
             let _ = child.wait();
             let _ = std::fs::remove_file(&config_path);
-            panic!("v2ray 服务端启动超时");
+            panic!("xray 服务端启动超时");
         }
         tokio::time::sleep(Duration::from_millis(60)).await;
     }
@@ -176,12 +176,12 @@ async fn tcp_echo_roundtrip(socks: SocketAddr) {
 }
 
 #[tokio::test]
-#[ignore = "需要 src-tauri/binaries/v2ray-x86_64-pc-windows-msvc.exe（bun run prepare:sidecar）"]
+#[ignore = "需要 src-tauri/binaries/xray-x86_64-pc-windows-msvc.exe（bun run prepare:sidecar）"]
 async fn aead_alter_id_zero_tcp() {
     let (_server, server_port) = start_server(0).await;
     let config_dir = std::env::temp_dir().join(format!("nano-sidecar-aead-{}", std::process::id()));
     std::fs::create_dir_all(&config_dir).unwrap();
-    let sidecar = V2raySidecar::start(
+    let sidecar = XraySidecar::start(
         &client_node(server_port, 0, CipherMethod::Aes128Gcm),
         &config_dir,
     )
@@ -193,13 +193,13 @@ async fn aead_alter_id_zero_tcp() {
 }
 
 #[tokio::test]
-#[ignore = "需要 src-tauri/binaries/v2ray-x86_64-pc-windows-msvc.exe（bun run prepare:sidecar）"]
+#[ignore = "需要 src-tauri/binaries/xray-x86_64-pc-windows-msvc.exe（bun run prepare:sidecar）"]
 async fn legacy_alter_id_tcp_and_udp() {
     let (_server, server_port) = start_server(64).await;
     let config_dir =
         std::env::temp_dir().join(format!("nano-sidecar-client-{}", std::process::id()));
     std::fs::create_dir_all(&config_dir).unwrap();
-    let sidecar = V2raySidecar::start(
+    let sidecar = XraySidecar::start(
         &client_node(server_port, 64, CipherMethod::Legacy),
         &config_dir,
     )
@@ -261,7 +261,7 @@ async fn legacy_alter_id_tcp_and_udp() {
 }
 
 #[tokio::test]
-#[ignore = "需要 src-tauri/binaries/v2ray-x86_64-pc-windows-msvc.exe（bun run prepare:sidecar）"]
+#[ignore = "需要 src-tauri/binaries/xray-x86_64-pc-windows-msvc.exe（bun run prepare:sidecar）"]
 async fn app_state_routes_legacy_tcp_and_udp() {
     let (_server, server_port) = start_server(64).await;
     let config_dir = std::env::temp_dir().join(format!("nano-app-sidecar-{}", std::process::id()));

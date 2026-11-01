@@ -1,4 +1,4 @@
-//! 内置 v2ray-core sidecar 的生命周期管理。
+//! 内置 Xray-core sidecar 的生命周期管理。
 //!
 //! 每个 VMess 节点对应一个本地 SOCKS 入站。NanoShadowrocket 只把它当作
 //! 上游出站使用：TCP 走 SOCKS CONNECT，UDP 走 SOCKS UDP ASSOCIATE。
@@ -23,8 +23,8 @@ const LOG_TAIL: usize = 2048;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// 一个正在运行的 v2ray-core 子进程。
-pub struct V2raySidecar {
+/// 一个正在运行的 Xray-core 子进程。
+pub struct XraySidecar {
     child: Child,
     socks: SocketAddr,
     config_path: PathBuf,
@@ -32,12 +32,12 @@ pub struct V2raySidecar {
     _job: Option<job::JobHandle>,
 }
 
-impl V2raySidecar {
+impl XraySidecar {
     /// 启动 sidecar 并等待本地 SOCKS 端口可连接。
     pub async fn start(node: &NodeEntry, config_dir: &Path) -> Result<Self, AppError> {
         if !node.transport.supported() {
             return Err(AppError::Unsupported(format!(
-                "v2ray 内核暂未接入 {} 传输",
+                "xray 内核暂未接入 {} 传输",
                 node.transport.as_str()
             )));
         }
@@ -45,33 +45,33 @@ impl V2raySidecar {
         let binary = binary_path()?;
         let port = pick_port()?;
         let socks = SocketAddr::from(([127, 0, 0, 1], port));
-        let config_path = config_dir.join("v2ray-sidecar.json");
-        let log_path = config_dir.join("v2ray-sidecar.log");
+        let config_path = config_dir.join("xray-sidecar.json");
+        let log_path = config_dir.join("xray-sidecar.log");
 
         std::fs::create_dir_all(config_dir)
             .map_err(|e| AppError::Sidecar(format!("创建配置目录失败：{e}")))?;
 
         let json = config::build(node, port);
         let bytes = serde_json::to_vec_pretty(&json)
-            .map_err(|e| AppError::Sidecar(format!("生成 v2ray 配置失败：{e}")))?;
+            .map_err(|e| AppError::Sidecar(format!("生成 xray 配置失败：{e}")))?;
         if let Err(err) = std::fs::write(&config_path, bytes) {
             // 写失败也可能留下半截文件，不能让它带着 UUID 留在磁盘上。
             let _ = std::fs::remove_file(&config_path);
-            return Err(AppError::Sidecar(format!("写入 v2ray 配置失败：{err}")));
+            return Err(AppError::Sidecar(format!("写入 xray 配置失败：{err}")));
         }
 
         let log = match File::create(&log_path) {
             Ok(log) => log,
             Err(err) => {
                 let _ = std::fs::remove_file(&config_path);
-                return Err(AppError::Sidecar(format!("创建 v2ray 日志失败：{err}")));
+                return Err(AppError::Sidecar(format!("创建 xray 日志失败：{err}")));
             }
         };
         let log_err = match log.try_clone() {
             Ok(log) => log,
             Err(err) => {
                 let _ = std::fs::remove_file(&config_path);
-                return Err(AppError::Sidecar(format!("复制 v2ray 日志句柄失败：{err}")));
+                return Err(AppError::Sidecar(format!("复制 xray 日志句柄失败：{err}")));
             }
         };
 
@@ -93,7 +93,7 @@ impl V2raySidecar {
             Ok(child) => child,
             Err(err) => {
                 let _ = std::fs::remove_file(&config_path);
-                return Err(AppError::Sidecar(format!("启动 v2ray 内核失败：{err}")));
+                return Err(AppError::Sidecar(format!("启动 xray 内核失败：{err}")));
             }
         };
 
@@ -107,7 +107,7 @@ impl V2raySidecar {
             return Err(err);
         }
 
-        log::info!("v2ray 内核已启动，本地 SOCKS 监听 {socks}");
+        log::info!("xray 内核已启动，本地 SOCKS 监听 {socks}");
         Ok(Self {
             child,
             socks,
@@ -122,7 +122,7 @@ impl V2raySidecar {
     }
 }
 
-impl Drop for V2raySidecar {
+impl Drop for XraySidecar {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -140,25 +140,25 @@ fn binary_path() -> Result<PathBuf, AppError> {
     let dir = exe
         .parent()
         .ok_or_else(|| AppError::Sidecar("无法定位程序目录".into()))?;
-    let bundled = dir.join("v2ray.exe");
+    let bundled = dir.join("xray.exe");
     if bundled.is_file() {
         return Ok(bundled);
     }
 
     // 开发态（tauri dev / cargo test）可能还没把 externalBin 复制到 target/debug，
-    // 回退到仓库里的构建产物；release 只认安装包同目录的 v2ray.exe。
+    // 回退到仓库里的构建产物；release 只认安装包同目录的 xray.exe。
     #[cfg(debug_assertions)]
     {
         let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
-            .join("v2ray-x86_64-pc-windows-msvc.exe");
+            .join("xray-x86_64-pc-windows-msvc.exe");
         if dev.is_file() {
             return Ok(dev);
         }
     }
 
     Err(AppError::Sidecar(
-        "未找到内置 v2ray 内核，请重新安装，或在源码目录运行 bun run prepare:sidecar".into(),
+        "未找到内置 xray 内核，请重新安装，或在源码目录运行 bun run prepare:sidecar".into(),
     ))
 }
 
@@ -178,7 +178,7 @@ async fn wait_ready(child: &mut Child, socks: SocketAddr, log_path: &Path) -> Re
     loop {
         if let Ok(Some(status)) = child.try_wait() {
             return Err(AppError::Sidecar(format!(
-                "v2ray 内核提前退出（{status}）：{}",
+                "xray 内核提前退出（{status}）：{}",
                 log_tail(log_path)
             )));
         }
@@ -195,7 +195,7 @@ async fn wait_ready(child: &mut Child, socks: SocketAddr, log_path: &Path) -> Re
 
         if tokio::time::Instant::now() >= deadline {
             return Err(AppError::Sidecar(format!(
-                "v2ray 内核启动超时：{}",
+                "xray 内核启动超时：{}",
                 log_tail(log_path)
             )));
         }

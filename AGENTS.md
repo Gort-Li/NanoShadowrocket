@@ -14,9 +14,9 @@
 
 ## 1. 项目是什么
 
-Windows 桌面代理客户端：单端口混合入站（HTTP + SOCKS5）→ 规则分流 → VMess / VLESS（内置 v2ray-core sidecar）或直连。
+Windows 桌面代理客户端：单端口混合入站（HTTP + SOCKS5）→ 规则分流 → VMess / VLESS（内置 Xray-core sidecar）或直连。
 界面用 React，入站 / 规则 / 统计 / 生命周期在 Rust，全部跑在 Tauri 的 tokio 运行时里。
-VMess / VLESS 的协议细节（AEAD、legacy `alterId`、REALITY、WS、UDP）交给随安装包分发的 v2ray-core sidecar；
+VMess / VLESS 的协议细节（AEAD、legacy `alterId`、REALITY、Vision flow、WS、UDP）交给随安装包分发的 Xray-core sidecar；
 Rust 只通过本地 SOCKS5 使用它，**没有 TUN、没有系统服务**。
 
 明确不做：Electron、TUN/wintun、系统服务、把 Go 运行时嵌入主进程。
@@ -27,7 +27,7 @@ sidecar 只作为出站，不接管系统流量；当前支持 `tcp` / `ws` 传�
 | 场景 | 命令 |
 | --- | --- |
 | 安装依赖 | `bun install` |
-| 下载 / 校验 v2ray sidecar | `bun run prepare:sidecar` |
+| 下载 / 校验 xray sidecar | `bun run prepare:sidecar` |
 | 前端开发（浏览器，自动演示数据） | `bun run dev` |
 | 桌面端开发（推荐） | `bun run tauri:dev` |
 | 前端类型检查 + 构建 | `bun run build` |
@@ -45,7 +45,7 @@ sidecar 只作为出站，不接管系统流量；当前支持 `tcp` / `ws` 传�
 
 ### 改动公共签名 / 数据模型后的验证顺序（必读）
 
-凡改动 `NodeEntry` 等数据模型字段、`V2raySidecar` 等公共函数的出入参，或任何影响集成测试
+凡改动 `NodeEntry` 等数据模型字段、`XraySidecar` 等公共函数的出入参，或任何影响集成测试
 （`tests/*.rs`）的代码时，**先跑全目标编译，再跑单测与静态检查**：
 
 ```bash
@@ -72,7 +72,7 @@ cargo fmt -- --check          # 格式复核（CI 会检查）
 
 ```
 .github/workflows/          ci / release 两个工作流
-scripts/                    set-version.mjs、release.mjs（本地一键发版：版本号 + tag + Release）、fetch-v2ray.mjs（sidecar 下载校验）、shot-rules.cjs
+scripts/                    set-version.mjs、release.mjs（本地一键发版：版本号 + tag + Release）、fetch-xray.mjs（sidecar 下载校验）、shot-rules.cjs
 RELEASE.md                  发版手册（面向维护者的操作步骤，原理在本文件第 11 节）
 
 src/                         前端
@@ -100,14 +100,14 @@ src-tauri/src/               后端
 │   ├── socks5_client.rs     连本地 sidecar 的 SOCKS5 客户端（CONNECT / UDP）
 │   ├── udp.rs               UdpOutbound / UdpFlow：直连与 sidecar UDP
 │   └── inbound/udp.rs       SOCKS5 UDP ASSOCIATE 服务端
-├── sidecar/                 v2ray-core 配置生成、启动/就绪/退出、Job Object
+├── sidecar/                 Xray-core 配置生成、启动/就绪/退出、Job Object
 ├── vmess/                   原生 AEAD 实现（保留用于参考与 vmess_e2e）
 ├── sysproxy/                系统代理快照/写入/还原、代理环境变量、开机自启
 └── resources/               内置 CN 网段
 
-src-tauri/binaries/          构建时下载的 v2ray.exe（gitignore，不提交）
-src-tauri/resources/         随安装包分发的 v2ray-LICENSE.txt
-src-tauri/tests/sidecar_e2e.rs  真实 v2ray-core 的 legacy TCP + UDP 测试（ignored）
+src-tauri/binaries/          构建时下载的 xray.exe（gitignore，不提交）
+src-tauri/resources/         随安装包分发的 xray-LICENSE.txt
+src-tauri/tests/sidecar_e2e.rs  真实 Xray-core 的 legacy TCP + UDP 测试（ignored）
 ```
 
 ## 4. 运行架构
@@ -144,16 +144,16 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 - 活动连接由 `proxy/stats.rs` 的 `ActiveConnections` 维护：TCP 每条连接一个 guard，UDP 按
   `host:port` 去重并在关联结束（guard drop）时移除；拒绝的连接不进入列表。
 
-### v2ray sidecar（`src-tauri/src/sidecar`）
+### xray sidecar（`src-tauri/src/sidecar`）
 
-- 所有 VMess 出站都走 sidecar：`AppState::start` 为当前节点生成最小配置，启动
-  `v2ray.exe run -c <config_dir>/v2ray-sidecar.json`，只监听 `127.0.0.1:<随机端口>` 的 SOCKS 入站（`udp: true`）。
+- 所有 VMess/VLESS 出站都走 sidecar：`AppState::start` 为当前节点生成最小配置，启动
+  `xray.exe run -c <config_dir>/xray-sidecar.json`，只监听 `127.0.0.1:<随机端口>` 的 SOCKS 入站（`udp: true`）。
 - TCP 用 `proxy/socks5_client.rs` 的 `CONNECT`；UDP 用 `UDP ASSOCIATE` + 一条 `UdpFlow`。
-- `V2raySidecar` 在 `AppState::stop` 时 drop：`Child::kill` + 删除含 UUID 的临时配置。
+- `XraySidecar` 在 `AppState::stop` 时 drop：`Child::kill` + 删除含 UUID 的临时配置。
 - Windows Job Object 设置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，应用崩溃或被强制结束时 sidecar 不会残留。
-- 子进程用 `CREATE_NO_WINDOW` 启动，stdout/stderr 写到 `v2ray-sidecar.log`；启动失败时把日志尾部拼进 `sidecar_error`。
-- 配置里 `alterId > 0` 由 v2ray-core 使用 legacy 请求头；`aes-*-cfb` 映射为 `security: "auto"`（JSON 配置没有 `legacy` 选项）。
-- 入站、规则、统计仍在 Rust 侧，sidecar 只负责 VMess 编解码与 UDP 转发。
+- 子进程用 `CREATE_NO_WINDOW` 启动，stdout/stderr 写到 `xray-sidecar.log`；启动失败时把日志尾部拼进 `sidecar_error`。
+- 配置里 `alterId > 0` 由 Xray-core 使用 legacy 请求头；`aes-*-cfb` 映射为 `security: "auto"`（JSON 配置没有 `legacy` 选项）。
+- 入站、规则、统计仍在 Rust 侧，sidecar 只负责 VMess/VLESS 编解码与 UDP 转发。
 
 ### 规则热替换
 
@@ -180,7 +180,7 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 
 - 位置：`app.path().app_config_dir()`，即 `%APPDATA%\com.nanoshadowrocket.desktop\config.json`。
 - 规则缓存：同目录 `rules/<订阅 id>.conf`。
-- sidecar 临时文件：同目录 `v2ray-sidecar.json`（含 UUID，正常停止即删除）与 `v2ray-sidecar.log`（保留最近一次启动日志）。
+- sidecar 临时文件：同目录 `xray-sidecar.json`（含 UUID，正常停止即删除）与 `xray-sidecar.log`（保留最近一次启动日志）。
 - 写入方式：临时文件 + 原子 rename（`config/store.rs`）；解析失败会把原文件备份成 `config.json.bak` 并回退默认值。
 - 字段全部 `camelCase`（`#[serde(rename_all = "camelCase", default)]`），前端 `lib/types.ts` 必须同步。
 - `NodeEntry.udp` 默认 `true`；旧配置没有该字段时视为允许 UDP，旧链接的 `udp=0` 才会关闭。
@@ -209,7 +209,7 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 | `no_node` / `node_not_found` | 未选节点 / 节点已删除 |
 | `invalid_input` | 参数校验失败（UUID、URL、端口等） |
 | `unsupported_config` | 节点用了未实现的传输或加密 |
-| `sidecar_error` | 内置 v2ray 内核缺失、启动失败、握手失败或提前退出 |
+| `sidecar_error` | 内置 xray 内核缺失、启动失败、握手失败或提前退出 |
 | `invalid_uuid` / `upstream_unreachable` / `rejected` | 来自 `ProxyError` |
 | `remote_error` / `config_error` / `io_error` / `internal_error` | 订阅、配置、文件、内部错误 |
 
@@ -262,17 +262,17 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 
 ## 7. VMess：sidecar 为生产路径
 
-- **生产路径**：`AppState::start` 启动 v2ray-core sidecar，所有 VMess 节点（`alterId = 0` 与 `> 0`）都经本地 SOCKS5 出站。
-- `alterId = 0`：v2ray-core 使用 AEAD 请求头；`alterId > 0`：legacy 请求头 + alterId 派生认证。
+- **生产路径**：`AppState::start` 启动 Xray-core sidecar，所有 VMess 节点（`alterId = 0` 与 `> 0`）都经本地 SOCKS5 出站。
+- `alterId = 0`：Xray-core 使用 AEAD 请求头；`alterId > 0`：legacy 请求头 + alterId 派生认证。
 - UDP：sidecar 的 SOCKS 入站开启 `udp: true`；NanoShadowrocket 通过 `UDP ASSOCIATE` 转发，节点 `udp = false` 时拒绝。
 - 传输：sidecar 配置目前固定 `network: "tcp"`、`security: "none"`；`Transport::supported()` 只允许 tcp，ws / grpc / TLS 仍未接入。
 - 加密：`CipherMethod::Aes128Gcm | ChaCha20Poly1305` 直接映射；`Legacy`（`aes-128-cfb` / `aes-256-cfb`）映射为 `"auto"`，由 alterId 决定实际头格式。
-- sidecar 配置不写 routing / DNS / sniffing；域名原样交给 v2ray-core，直连 UDP 的域名由 Rust 侧 `Router::resolve` 解析。
+- sidecar 配置不写 routing / DNS / sniffing；域名原样交给 Xray-core，直连 UDP 的域名由 Rust 侧 `Router::resolve` 解析。
 - `src-tauri/src/vmess/` 的原生 AEAD 实现保留：
   - 用于 `tests/vmess_e2e.rs` 与协议回归；
   - `AppState` 生产路径不再使用 `VmessOutbound`（单测通过 `native_outbound` 开关保留 start/stop 覆盖）。
 - 原生实现仍只支持 AEAD + TCP；`alterId != 0` 会返回 `unsupported_config`。新增传输不要改 `chunk.rs` / `header.rs`，应扩展 sidecar 配置或新增 `Outbound` 实现。
-- **响应头惰性**是原生实现与官方 v2ray-core 互通的关键；改动 `vmess/transport.rs` 前先跑 `tests/vmess_e2e.rs`。
+- **响应头惰性**是原生实现与官方 Xray-core 互通的关键；改动 `vmess/transport.rs` 前先跑 `tests/vmess_e2e.rs`。
 
 ## 8. 系统代理与开机自启（`src-tauri/src/sysproxy`）
 
@@ -355,9 +355,9 @@ TcpStream ──peek 首字节──> 0x05 走 SOCKS5，否则走 HTTP
 - 单测跟模块放在一起（`#[cfg(test)] mod tests`），覆盖：规则解析/匹配、VMess AEAD 与分块、
   `vmess://` 解析、配置往返、错误码、SOCKS5 握手、UDP 包编解码、sidecar 配置生成、HTTP 头解析、统计速率、
   活动连接的 guard 自动移除与清空、默认策略热替换。
-- `tests/vmess_e2e.rs` 需要真实 v2ray-core（`127.0.0.1:10086`）与 `python -m http.server 18080`，
+- `tests/vmess_e2e.rs` 需要真实 Xray-core（`127.0.0.1:10086`）与 `python -m http.server 18080`，
   默认 `#[ignore]`。注意 `#[ignore = "..."]` 的值必须是**字面量**，不能用常量。
-- `tests/sidecar_e2e.rs` 自行拉起本地 v2ray-core 服务端，验证 `alterId = 0` AEAD、`alterId = 64` legacy TCP、
+- `tests/sidecar_e2e.rs` 自行拉起本地 Xray-core 服务端，验证 `alterId = 0` AEAD、`alterId = 64` legacy TCP、
   SOCKS5 UDP ASSOCIATE，以及完整 `AppState` 入站链路；需要先 `bun run prepare:sidecar`，默认 `#[ignore]`。
 - `tests/rules_real.rs` 需要访问 GitHub Pages，默认 `#[ignore]`，用于验证大订阅与真实规则集：
   `cargo test --test rules_real -- --ignored --nocapture`。
@@ -376,11 +376,11 @@ cd src-tauri && cargo fmt && cargo clippy --lib --tests && cargo test --lib
   把 `src-tauri/target` 加入 Windows Defender 排除项可显著提速。
 - 产物：`src-tauri/target/release/nano-shadowrocket.exe`、
   `src-tauri/target/release/bundle/nsis/NanoShadowrocket_<version>_x64-setup.exe`。
-- sidecar 通过 `tauri.conf.json` 的 `bundle.externalBin: ["binaries/v2ray"]` 打进安装包；
-  源码文件名必须是 `src-tauri/binaries/v2ray-x86_64-pc-windows-msvc.exe`，安装后位于主程序同目录的 `v2ray.exe`。
-- `scripts/fetch-v2ray.mjs` 固定 v2ray-core `v5.53.0`，同时校验 zip 与 exe 的 SHA256；
+- sidecar 通过 `tauri.conf.json` 的 `bundle.externalBin: ["binaries/xray"]` 打进安装包；
+  源码文件名必须是 `src-tauri/binaries/xray-x86_64-pc-windows-msvc.exe`，安装后位于主程序同目录的 `xray.exe`。
+- `scripts/fetch-xray.mjs` 固定 Xray-core `v26.10.31`，同时校验 zip 与 exe 的 SHA256；
   `beforeDevCommand` / `beforeBuildCommand` 会自动执行 `bun run prepare:sidecar`。
-- 安装包因此增加约 15-20MB（压缩后）；`v2ray.exe` 本身约 40MB，不提交仓库。
+- 安装包因此增加约 15-20MB（压缩后）；`xray.exe` 本身约 34MB，不提交仓库。
 - 应用标识符 `com.nanoshadowrocket.desktop` 一经发布不要改，否则配置目录与升级链会断。
 
 ### 版本号体系
@@ -524,10 +524,10 @@ VMess 的协议差异优先通过 sidecar 配置解决，不要把新传输写�
 - **端口 0**：测试里用 `listen_port = 0` 让系统分配，`ProxyStatus.local_port` 返回实际端口。
 - **不要打印 UUID**：`sanitize` 只用于订阅 URL；节点相关日志只写名称与 `host:port`。
   sidecar 配置文件含 UUID，属于必要文件，正常停止会删除；不要把它的内容写进日志或错误文案。
-- **sidecar 路径**：运行时只找主程序同目录的 `v2ray.exe`；开发态回退到
-  `src-tauri/binaries/v2ray-x86_64-pc-windows-msvc.exe`。打包缺文件会直接报 `sidecar_error`。
+- **sidecar 路径**：运行时只找主程序同目录的 `xray.exe`；开发态回退到
+  `src-tauri/binaries/xray-x86_64-pc-windows-msvc.exe`。打包缺文件会直接报 `sidecar_error`。
 - **UDP 只走 SOCKS5**：系统代理（WinINET）不承载 UDP；HTTP 入站也没有 UDP。
-- **sidecar 生命周期**：必须依赖 `V2raySidecar` 的 `Drop` 或 Job Object，不要在命令层直接 `Child::kill`；
+- **sidecar 生命周期**：必须依赖 `XraySidecar` 的 `Drop` 或 Job Object，不要在命令层直接 `Child::kill`；
   否则含 UUID 的临时配置可能残留。
 - **测试开关**：`AppState.native_outbound` 只在 `#[cfg(test)]` 下存在，生产路径不能被它绕过。
 - **活动连接 guard**：`ActiveConnections::begin` 返回的 guard 必须在连接/关联任务里活到结束，不要 `let _ = ...`
