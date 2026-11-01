@@ -151,9 +151,7 @@ fn split_host_port(host_port: &str) -> Result<(String, u16), LinkError> {
             .find(']')
             .ok_or_else(|| LinkError::Invalid("服务器地址缺少 ]".into()))?;
         let tail = &rest[close + 1..];
-        let port = tail
-            .strip_prefix(':')
-            .ok_or(LinkError::Missing("port"))?;
+        let port = tail.strip_prefix(':').ok_or(LinkError::Missing("port"))?;
         (rest[..close].to_string(), percent_decode(port))
     } else {
         let (h, p) = hp.rsplit_once(':').ok_or(LinkError::Missing("port"))?;

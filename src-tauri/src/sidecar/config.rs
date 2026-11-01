@@ -62,7 +62,10 @@ fn stream_settings(node: &NodeEntry) -> Value {
             }
             "reality" => {
                 let mut s = Map::new();
-                s.insert("serverName".into(), json!(tls.server_name.as_deref().unwrap_or("")));
+                s.insert(
+                    "serverName".into(),
+                    json!(tls.server_name.as_deref().unwrap_or("")),
+                );
                 if let Some(fp) = &tls.fingerprint {
                     s.insert("fingerprint".into(), json!(fp));
                 }
@@ -89,7 +92,14 @@ fn stream_settings(node: &NodeEntry) -> Value {
 
     if transport == Transport::Ws {
         let mut ws = Map::new();
-        ws.insert("path".into(), json!(node.ws.as_ref().and_then(|w| w.path.clone()).unwrap_or_default()));
+        ws.insert(
+            "path".into(),
+            json!(node
+                .ws
+                .as_ref()
+                .and_then(|w| w.path.clone())
+                .unwrap_or_default()),
+        );
         if let Some(h) = node.ws.as_ref().and_then(|w| w.host.as_ref()) {
             let mut headers = Map::new();
             headers.insert("Host".into(), json!(h));

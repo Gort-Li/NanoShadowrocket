@@ -149,13 +149,19 @@ fn parse_json_link(text: &str) -> Result<ParsedLink, LinkError> {
     let node_tls: Option<NodeTls> = if tls_on {
         let node = NodeTls {
             enabled: true,
-            server_name: json_str(&value, &["sni", "serverName"])
-                .or_else(|| Some(host.clone())),
-            fingerprint: json_str(&value, &["fp", "fingerprint"])
-                .or_else(|| Some("chrome".into())),
+            server_name: json_str(&value, &["sni", "serverName"]).or_else(|| Some(host.clone())),
+            fingerprint: json_str(&value, &["fp", "fingerprint"]).or_else(|| Some("chrome".into())),
             reality_public_key: if reality { pbk.clone() } else { None },
-            reality_short_id: if reality { json_str(&value, &["sid", "shortId"]) } else { None },
-            reality_spider_x: if reality { json_str(&value, &["spx", "spiderX"]) } else { None },
+            reality_short_id: if reality {
+                json_str(&value, &["sid", "shortId"])
+            } else {
+                None
+            },
+            reality_spider_x: if reality {
+                json_str(&value, &["spx", "spiderX"])
+            } else {
+                None
+            },
             alpn: json_str(&value, &["alpn"]).map(|s| {
                 s.split(',')
                     .map(|part| part.trim().to_string())
