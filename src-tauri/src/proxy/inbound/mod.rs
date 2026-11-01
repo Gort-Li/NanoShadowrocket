@@ -89,6 +89,8 @@ pub async fn start(bind: SocketAddr, deps: InboundDeps) -> Result<InboundHandle,
                 accepted = listener.accept() => {
                     match accepted {
                         Ok((stream, peer)) => {
+                            // 交互式代理对 Nagle/Delayed-ACK 引入的延时最敏感，接受即关闭。
+                            let _ = stream.set_nodelay(true);
                             let deps = deps.clone();
                             tokio::spawn(async move { handle(stream, peer, deps).await });
                         }
@@ -303,7 +305,6 @@ where
             break;
         }
         writer.write_all(&buf[..n]).await?;
-        writer.flush().await?;
         total += n as u64;
         if upload {
             stats.add_up(n as u64);
