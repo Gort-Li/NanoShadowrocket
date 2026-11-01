@@ -36,6 +36,7 @@ function fromConfig(config: AppConfig): SettingsInput {
     proxyEnv: config.proxyEnv,
     launchAtStartup: config.launchAtStartup,
     autoStartProxy: config.autoStartProxy,
+    overridePac: config.overridePac,
     dnsServer: config.dnsServer,
     ipv6: config.ipv6,
   };
@@ -280,6 +281,17 @@ export default function SettingsPage() {
               checked={draft.systemProxy}
               label="接管系统代理"
               onChange={(next) => applyNow({ systemProxy: next })}
+            />
+          </SettingRow>
+          <SettingRow
+            label="覆盖企业 PAC"
+            description="默认关闭：保留系统原有 PAC。开启后会移除 PAC，改用本应用固定代理"
+          >
+            <Switch
+              checked={draft.overridePac}
+              label="覆盖企业 PAC"
+              disabled={!draft.systemProxy}
+              onChange={(next) => applyNow({ overridePac: next })}
             />
           </SettingRow>
           <SettingRow

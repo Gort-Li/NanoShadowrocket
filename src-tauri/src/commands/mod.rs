@@ -26,6 +26,7 @@ pub struct SettingsInput {
     pub proxy_env: bool,
     pub launch_at_startup: bool,
     pub auto_start_proxy: bool,
+    pub override_pac: bool,
     pub dns_server: String,
     pub ipv6: bool,
 }
@@ -111,7 +112,8 @@ pub async fn update_settings(
         && (input.listen_port != current.listen_port
             || input.allow_lan != current.allow_lan
             || input.system_proxy != current.system_proxy
-            || input.proxy_env != current.proxy_env);
+            || input.proxy_env != current.proxy_env
+            || input.override_pac != current.override_pac);
     if needs_restart {
         state.stop().await?;
     }
@@ -124,6 +126,7 @@ pub async fn update_settings(
         cfg.proxy_env = input.proxy_env;
         cfg.launch_at_startup = input.launch_at_startup;
         cfg.auto_start_proxy = input.auto_start_proxy;
+        cfg.override_pac = input.override_pac;
         cfg.dns_server = input.dns_server.trim().to_string();
         cfg.ipv6 = input.ipv6;
     })?;

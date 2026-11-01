@@ -52,7 +52,10 @@ pub fn snapshot() -> Result<ProxySnapshot> {
 }
 
 /// 把系统代理指向 `127.0.0.1:{port}`。返回前的 `proxy_dirty` 标记由调用方维护。
-pub fn apply(port: u16) -> Result<()> {
+///
+/// `override_pac` 为 true 时才移除系统原有的 PAC（企业代理）——PAC 优先级高于固定
+/// 代理，不删掉流量不会经过我们；默认保留，避免破坏企业网络环境。
+pub fn apply(port: u16, override_pac: bool) -> Result<()> {
     #[cfg(windows)]
     {
         use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
@@ -69,8 +72,8 @@ pub fn apply(port: u16) -> Result<()> {
             .map_err(|e| SysProxyError::Write(e.to_string()))?;
         key.set_value("ProxyOverride", &DEFAULT_BYPASS.to_string())
             .map_err(|e| SysProxyError::Write(e.to_string()))?;
-        // PAC 优先级高于固定代理，必须临时移除，否则流量不会经过我们。
-        if key.get_value::<String, _>("AutoConfigURL").is_ok() {
+        if override_pac && key.get_value::<String, _>("AutoConfigURL").is_ok() {
+            // PAC 优先级高于固定代理，必须临时移除，否则流量不会经过我们。
             let _ = key.delete_value("AutoConfigURL");
         }
 

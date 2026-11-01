@@ -223,6 +223,8 @@ pub struct AppConfig {
     pub launch_at_startup: bool,
     /// 开机自启（`--hidden` 静默启动）后是否自动开启代理。
     pub auto_start_proxy: bool,
+    /// 是否接管并覆盖系统原有的 PAC（企业代理）。默认关闭：保留原 PAC 不动。
+    pub override_pac: bool,
     /// `"system"` 表示跟随系统 DNS，其余为 DoH 端点。
     pub dns_server: String,
     pub ipv6: bool,
@@ -256,6 +258,7 @@ impl Default for AppConfig {
             proxy_env: true,
             launch_at_startup: true,
             auto_start_proxy: true,
+            override_pac: false,
             dns_server: "system".into(),
             ipv6: true,
             nodes: Vec::new(),

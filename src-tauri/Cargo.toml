@@ -69,6 +69,7 @@ tauri = { version = "2.12.5", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-notification = "2"
 
 # 关闭 LTO 并放开并行单元：安装包只比 thin LTO 大 0.2MB，
 # 但省掉每次打包近两分钟的链接时间，日常迭代优先。

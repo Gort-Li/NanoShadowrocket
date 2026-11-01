@@ -357,7 +357,7 @@ impl AppState {
                     c.proxy_dirty = true;
                     c.proxy_snapshot = Some(snapshot);
                 })?;
-                sysproxy::apply(port)
+                sysproxy::apply(port, cfg.override_pac)
                     .map_err(|e| AppError::Internal(format!("设置系统代理失败：{e}")))?;
                 proxy_applied = true;
             }

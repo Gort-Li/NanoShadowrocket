@@ -22,6 +22,7 @@ use crate::config::ConfigStore;
 use crate::events::TrafficPayload;
 use crate::state::AppState;
 use crate::sysproxy::autostart::SILENT_FLAG;
+use tauri_plugin_notification::NotificationExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,6 +34,7 @@ pub fn run() {
                 show_main(app);
             }
         }))
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -194,8 +196,8 @@ fn spawn_silent_autostart(app: AppHandle, state: Arc<AppState>) {
     }
 
     tauri::async_runtime::spawn(async move {
-        for delay in AUTOSTART_DELAYS {
-            tokio::time::sleep(Duration::from_secs(delay)).await;
+        for delay in AUTOSTART_DELAYS.iter() {
+            tokio::time::sleep(Duration::from_secs(*delay)).await;
             match state.start().await {
                 Ok(status) => {
                     log::info!("开机自启：已自动开启代理，端口 {}", status.local_port);
@@ -205,6 +207,14 @@ fn spawn_silent_autostart(app: AppHandle, state: Arc<AppState>) {
                 Err(err) => log::warn!("开机自启自动开启代理失败（延迟 {delay}s 后重试）：{err}"),
             }
         }
+        // 全部退避尝试均失败，放弃并提醒用户手动开启，避免无声断连。
+        log::warn!("开机自启自动开启代理：多次尝试失败，已放弃");
+        let _ = app
+            .notification()
+            .builder()
+            .title("开机自动连接失败")
+            .body("已多次尝试仍未开启代理，请打开主界面手动连接。")
+            .show();
     });
 }
 

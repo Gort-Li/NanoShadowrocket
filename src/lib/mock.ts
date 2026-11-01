@@ -75,6 +75,7 @@ export function demoBootstrap(): Bootstrap {
       proxyEnv: true,
       launchAtStartup: false,
       autoStartProxy: true,
+      overridePac: false,
       dnsServer: "https://cloudflare-dns.com/dns-query",
       ipv6: true,
       nodes: NODES,
