@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use app_lib::config::{NodeEntry, Transport};
+use app_lib::config::{NodeEntry, Protocol, Transport};
 use app_lib::proxy::{
     socks5_client, ConnectionProtocol, Outbound, SidecarOutbound, SidecarUdpOutbound, Target,
     UdpOutbound,
@@ -129,13 +129,24 @@ async fn start_server(alter_id: u16) -> (Server, u16) {
     (Server { child, config_path }, port)
 }
 
-fn client_config(port: u16, alter_id: u16, security: CipherMethod) -> VmessConfig {
-    VmessConfig {
-        host: "127.0.0.1".into(),
-        port,
-        uuid: UUID.into(),
-        alter_id,
-        security,
+fn client_node(port: u16, alter_id: u16, security: CipherMethod) -> NodeEntry {
+    NodeEntry {
+        id: "e2e-client".into(),
+        name: "e2e-client".into(),
+        protocol: Protocol::Vmess,
+        transport: Transport::Tcp,
+        config: VmessConfig {
+            host: "127.0.0.1".into(),
+            port,
+            uuid: UUID.into(),
+            alter_id,
+            security,
+        },
+        udp: true,
+        tls: None,
+        ws: None,
+        flow: None,
+        latency_ms: None,
     }
 }
 
@@ -171,8 +182,7 @@ async fn aead_alter_id_zero_tcp() {
     let config_dir = std::env::temp_dir().join(format!("nano-sidecar-aead-{}", std::process::id()));
     std::fs::create_dir_all(&config_dir).unwrap();
     let sidecar = V2raySidecar::start(
-        &client_config(server_port, 0, CipherMethod::Aes128Gcm),
-        Transport::Tcp,
+        &client_node(server_port, 0, CipherMethod::Aes128Gcm),
         &config_dir,
     )
     .await
@@ -190,8 +200,7 @@ async fn legacy_alter_id_tcp_and_udp() {
         std::env::temp_dir().join(format!("nano-sidecar-client-{}", std::process::id()));
     std::fs::create_dir_all(&config_dir).unwrap();
     let sidecar = V2raySidecar::start(
-        &client_config(server_port, 64, CipherMethod::Legacy),
-        Transport::Tcp,
+        &client_node(server_port, 64, CipherMethod::Legacy),
         &config_dir,
     )
     .await
@@ -269,6 +278,7 @@ async fn app_state_routes_legacy_tcp_and_udp() {
             cfg.nodes = vec![NodeEntry {
                 id: "legacy-test".into(),
                 name: "legacy-test".into(),
+                protocol: Protocol::Vmess,
                 transport: Transport::Tcp,
                 config: VmessConfig {
                     host: "127.0.0.1".into(),
@@ -278,6 +288,9 @@ async fn app_state_routes_legacy_tcp_and_udp() {
                     security: CipherMethod::Legacy,
                 },
                 udp: true,
+                tls: None,
+                ws: None,
+                flow: None,
                 latency_ms: None,
             }];
             cfg.selected_node = Some("legacy-test".into());

@@ -14,13 +14,13 @@
 
 ## 1. 项目是什么
 
-Windows 桌面代理客户端：单端口混合入站（HTTP + SOCKS5）→ 规则分流 → VMess（内置 v2ray-core sidecar）或直连。
+Windows 桌面代理客户端：单端口混合入站（HTTP + SOCKS5）→ 规则分流 → VMess / VLESS（内置 v2ray-core sidecar）或直连。
 界面用 React，入站 / 规则 / 统计 / 生命周期在 Rust，全部跑在 Tauri 的 tokio 运行时里。
-VMess 的协议细节（AEAD、legacy `alterId`、UDP）交给随安装包分发的 v2ray-core sidecar；
+VMess / VLESS 的协议细节（AEAD、legacy `alterId`、REALITY、WS、UDP）交给随安装包分发的 v2ray-core sidecar；
 Rust 只通过本地 SOCKS5 使用它，**没有 TUN、没有系统服务**。
 
 明确不做：Electron、TUN/wintun、系统服务、把 Go 运行时嵌入主进程。
-sidecar 只作为出站，不接管系统流量；当前 UI 只暴露 `tcp` 传输，ws / grpc / TLS 仍未开放。
+sidecar 只作为出站，不接管系统流量；当前支持 `tcp` / `ws` 传输，TLS / REALITY 已开放，`grpc` 未开放。
 
 ## 2. 工具链与命令
 
@@ -36,11 +36,37 @@ sidecar 只作为出站，不接管系统流量；当前 UI 只暴露 `tcp` 传�
 | 后端格式化 | `cd src-tauri && cargo fmt` |
 | 静态检查（必须 0 警告） | `cargo clippy --lib --tests` |
 | 单元测试 | `cargo test --lib` |
+| 全目标编译（改公共签名 / data model 后必跑） | `cd src-tauri && cargo test --no-run --tests` |
 | 同步版本号 | `bun scripts/set-version.mjs 0.2.0` |
 | 原生 VMess 真实互操作测试 | `cargo test --test vmess_e2e -- --ignored --test-threads=1` |
 | sidecar 真实互操作测试（TCP + UDP + legacy alterId） | `cargo test --test sidecar_e2e -- --ignored --test-threads=1` |
 
 版本基线：Rust 1.90+、Tauri 2.12、React 19、Vite 5、Tailwind 3.4、bun 1.4。
+
+### 改动公共签名 / 数据模型后的验证顺序（必读）
+
+凡改动 `NodeEntry` 等数据模型字段、`V2raySidecar` 等公共函数的出入参，或任何影响集成测试
+（`tests/*.rs`）的代码时，**先跑全目标编译，再跑单测与静态检查**：
+
+```bash
+cd src-tauri
+cargo test --no-run --tests   # 编译 lib + bin + tests/*.rs 全部目标
+cargo test --lib              # 单元测试
+cargo clippy --lib --tests    # 静态检查，必须 0 警告
+cargo fmt -- --check          # 格式复核（CI 会检查）
+```
+
+不要只跑 `cargo test --lib` 就认为完成——集成测试只会在 `--no-run --tests` / CI 完整构建时被
+编译，单独跑 `--lib` 覆盖不到，曾因此漏改 `NodeEntry` 新增字段导致 CI 报 `E0061 / E0063`。
+
+### 新增协议的标准落地步骤
+
+1. `Protocol` 枚举（`config/model.rs`，当前含 `vmess` / `vless`）。
+2. 链接解析器（如 `config/vless_link.rs`），容纳服务商特定 `flow` / `alpn` / `sni`。
+3. 分发入口 `parse_link`（`config/mod.rs`）按 scheme 分流。
+4. sidecar 配置生成（`sidecar/config.rs`）按 `Protocol` 动态产出 `streamSettings`。
+5. 同步前端：`lib/types.ts` 类型 + `components/NodeSheet.tsx` 表单。
+6. 复核所有 `NodeEntry {}` 字面量（`commands/nodes.rs`、解析器、`tests/*`）补全新字段。
 
 ## 3. 目录地图
 
@@ -91,7 +117,9 @@ src-tauri/tests/sidecar_e2e.rs  真实 v2ray-core 的 legacy TCP + UDP 测试（
 1. `AppState::new(app_config_dir)`：加载 `config.json` → 若 `proxy_dirty` / `env_dirty` 为真则立即还原 → 清理上次残留的 sidecar 配置 → 编译规则集 → 创建 `RouterHandle`。
 2. `app.manage(Arc<AppState>)`。
 3. `setup_tray`：托盘菜单 id 为 `show` / `toggle` / `quit`。
-4. `spawn_traffic`：每秒 `stats.sample()`，把 `stats`、`running` 与 `active.snapshot()` 打包成 `TrafficPayload` 并 `emit("nano:traffic")`。
+4. `spawn_traffic`：自适应事件流——仅在代理开启且确有速率 / 活动连接时每秒 `stats.sample()`
+   并把 `stats`、`running`、`active.snapshot()` 打包成 `TrafficPayload` 推 `emit("nano:traffic")`；
+   归零时补发一次空闲态后静默，空闲 / 关闭时不再每秒产生 IPC。
 5. `spawn_remote_scheduler`：每 60 秒检查一次到期订阅，到期就更新并 `emit` 事件。
 6. `RunEvent::ExitRequested` 时同步调用 `state.restore_all()`；sidecar 由 Job Object 在进程退出时一并结束。
 
