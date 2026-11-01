@@ -282,16 +282,42 @@ fn spawn_traffic(app: AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        ticker.tick().await;
+        // 标记上一次是否推送过「活跃」状态，用于流量归零时补发一次空闲态再静默。
+        let mut emitting = false;
         loop {
             ticker.tick().await;
             state.stats.sample();
-            let payload = TrafficPayload {
-                stats: state.stats.snapshot(),
-                running: state.status().await.running,
-                active: state.active.snapshot(),
+            let running = state.status().await.running;
+            let snap = state.stats.snapshot();
+            let busy = snap.up_rate > 0 || snap.down_rate > 0 || {
+                let active = state.active.snapshot();
+                !active.is_empty()
             };
-            events::traffic(&app, &payload);
+            // 空闲时（代理关闭或无流量）停止向前端推事件，避免每秒 IPC 空转。
+            if running && busy {
+                let active = state.active.snapshot();
+                events::traffic(
+                    &app,
+                    &TrafficPayload {
+                        stats: snap,
+                        running: true,
+                        active,
+                    },
+                );
+                emitting = true;
+            } else if emitting {
+                // 由活跃转空闲：同步最后一次，让前端速率归零，之后静默。
+                let active = state.active.snapshot();
+                events::traffic(
+                    &app,
+                    &TrafficPayload {
+                        stats: snap,
+                        running,
+                        active,
+                    },
+                );
+                emitting = false;
+            }
         }
     });
 }
