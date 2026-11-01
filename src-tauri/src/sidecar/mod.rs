@@ -14,9 +14,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use crate::config::Transport;
+use crate::config::model::NodeEntry;
 use crate::error::AppError;
-use crate::vmess::VmessConfig;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(8);
 const READY_INTERVAL: Duration = Duration::from_millis(60);
@@ -35,15 +34,11 @@ pub struct V2raySidecar {
 
 impl V2raySidecar {
     /// 启动 sidecar 并等待本地 SOCKS 端口可连接。
-    pub async fn start(
-        config: &VmessConfig,
-        transport: Transport,
-        config_dir: &Path,
-    ) -> Result<Self, AppError> {
-        if !transport.supported() {
+    pub async fn start(node: &NodeEntry, config_dir: &Path) -> Result<Self, AppError> {
+        if !node.transport.supported() {
             return Err(AppError::Unsupported(format!(
                 "v2ray 内核暂未接入 {} 传输",
-                transport.as_str()
+                node.transport.as_str()
             )));
         }
 
@@ -56,7 +51,7 @@ impl V2raySidecar {
         std::fs::create_dir_all(config_dir)
             .map_err(|e| AppError::Sidecar(format!("创建配置目录失败：{e}")))?;
 
-        let json = config::build(config, port);
+        let json = config::build(node, port);
         let bytes = serde_json::to_vec_pretty(&json)
             .map_err(|e| AppError::Sidecar(format!("生成 v2ray 配置失败：{e}")))?;
         if let Err(err) = std::fs::write(&config_path, bytes) {

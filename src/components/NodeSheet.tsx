@@ -2,12 +2,20 @@ import { AlertTriangle, Link2, ListTree } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "../lib/cn";
 import { errorMessage, invoke } from "../lib/tauri";
-import type { AddNodeResult, Node, NodeInput, Security, Transport } from "../lib/types";
+import type {
+  AddNodeResult,
+  Node,
+  NodeInput,
+  Protocol,
+  Security,
+  Transport,
+} from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
 import Button from "./Button";
 import Sheet from "./Sheet";
 import Switch from "./Switch";
 
+const PROTOCOLS: Protocol[] = ["vmess", "vless"];
 const TRANSPORTS: Transport[] = ["tcp", "ws", "grpc", "h2", "quic", "kcp", "http"];
 const SECURITIES: Security[] = ["aes-128-gcm", "chacha20-poly1305", "legacy"];
 
@@ -20,7 +28,11 @@ function blank(): NodeInput {
     uuid: "",
     alterId: 0,
     security: "aes-128-gcm",
+    protocol: "vmess",
     transport: "tcp",
+    tls: null,
+    ws: null,
+    flow: null,
     udp: true,
   };
 }
@@ -34,7 +46,11 @@ function toInput(node: Node): NodeInput {
     uuid: node.uuid,
     alterId: node.alterId,
     security: node.security,
+    protocol: node.protocol,
     transport: node.transport,
+    tls: node.tls ?? null,
+    ws: node.ws ?? null,
+    flow: node.flow ?? null,
     udp: node.udp,
   };
 }
@@ -87,11 +103,14 @@ export default function NodeSheet({
     setForm(node ? toInput(node) : blank());
   }, [open, node]);
 
+  const isProxyLink = (v: string) =>
+  v.startsWith("vmess://") || v.startsWith("vless://") || v.startsWith("VLESS://");
+
   // 粘贴后即时解析预览，400ms 防抖避免每次按键都请求后端。
   useEffect(() => {
     if (!open || mode !== "link") return;
     const value = link.trim();
-    if (!value.startsWith("vmess://")) {
+    if (!isProxyLink(value)) {
       setPreview(null);
       setPreviewError(null);
       return;
@@ -112,7 +131,7 @@ export default function NodeSheet({
         return;
       }
       setPreview(null);
-      setPreviewError("浏览器预览模式无法解析 vmess://，请在桌面端粘贴");
+      setPreviewError("浏览器预览模式无法解析节点链接，请在桌面端粘贴");
     }, 400);
     return () => clearTimeout(timer);
   }, [link, mode, open, previewMode]);
@@ -131,7 +150,7 @@ export default function NodeSheet({
   };
 
   const canSubmit =
-    mode === "link" ? preview !== null || (previewMode && link.trim().startsWith("vmess://")) : Boolean(form.host && form.uuid);
+    mode === "link" ? preview !== null || (previewMode && isProxyLink(link.trim())) : Boolean(form.host && form.uuid);
 
   return (
     <Sheet
@@ -190,12 +209,12 @@ export default function NodeSheet({
 
       {mode === "link" ? (
         <div>
-          <Field label="vmess:// 链接" hint="支持 v2rayN 分享链接与 Shadowrocket 旧格式">
+          <Field label="vmess:// / vless:// 链接" hint="支持 v2rayN 分享链接、Shadowrocket 旧格式与 VLESS 通用格式">
             <textarea
               className="field-area h-[132px] font-mono text-[11px]"
               value={link}
               spellCheck={false}
-              placeholder="vmess://eyJ2IjoiMiIsInBzIjoi6aaZ5rivIDAxIiwiYWRkIjoiaGsuZXhhbXBsZS5jb20i..." 
+              placeholder="vmess://… 或 vless://…"
               onChange={(e) => setLink(e.target.value)}
             />
           </Field>
@@ -210,22 +229,33 @@ export default function NodeSheet({
 
           {preview && (
             <div className="mt-3 rounded-xl border border-hairline bg-white/[0.03] p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[12px] text-ink">{preview.node.name}</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="rounded-md border border-hairline px-1.5 py-[1px] font-mono text-[10px] text-ink-faint">
+                  {preview.node.protocol}
+                </span>
                 <span className="rounded-md border border-hairline px-1.5 py-[1px] font-mono text-[10px] text-ink-faint">
                   {preview.node.transport}
                 </span>
+                {preview.node.tls?.enabled && (
+                  <span className="rounded-md border border-hairline px-1.5 py-[1px] font-mono text-[10px]">
+                    {preview.node.tls.realityPublicKey ? "reality" : "tls"}
+                  </span>
+                )}
               </div>
               <p className="mt-1 font-mono text-[11px] text-ink-faint">
                 {preview.node.host}:{preview.node.port}
               </p>
               <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-ink-faint">
-                <span className="rounded-md bg-white/[0.04] px-1.5 py-[1px]">
-                  {preview.node.security}
-                </span>
-                <span className="rounded-md bg-white/[0.04] px-1.5 py-[1px]">
-                  alterId {preview.node.alterId}
-                </span>
+                {preview.node.protocol === "vmess" && (
+                  <>
+                    <span className="rounded-md bg-white/[0.04] px-1.5 py-[1px]">
+                      {preview.node.security}
+                    </span>
+                    <span className="rounded-md bg-white/[0.04] px-1.5 py-[1px]">
+                      alterId {preview.node.alterId}
+                    </span>
+                  </>
+                )}
                 <span className="rounded-md bg-white/[0.04] px-1.5 py-[1px]">
                   UDP {preview.node.udp ? "开" : "关"}
                 </span>
@@ -254,6 +284,20 @@ export default function NodeSheet({
               placeholder="香港 · 01"
               onChange={(e) => update("name", e.target.value)}
             />
+          </Field>
+
+          <Field label="协议">
+            <select
+              className="field"
+              value={form.protocol}
+              onChange={(e) => update("protocol", e.target.value as Protocol)}
+            >
+              {PROTOCOLS.map((item) => (
+                <option key={item} value={item}>
+                  {item === "vmess" ? "VMess" : "VLESS"}
+                </option>
+              ))}
+            </select>
           </Field>
 
           <div className="flex gap-3">
@@ -322,7 +366,7 @@ export default function NodeSheet({
             </div>
           </div>
 
-          <Field label="传输方式" hint="当前版本仅支持 tcp；ws / grpc 需要后续版本">
+          <Field label="传输方式" hint="当前支持 tcp / ws；grpc / h2 等需后续版本">
             <select
               className="field"
               value={form.transport}
@@ -335,6 +379,178 @@ export default function NodeSheet({
               ))}
             </select>
           </Field>
+
+          {form.transport === "ws" && (
+            <div className="flex gap-3">
+              <div className="min-w-0 flex-1">
+                <Field label="WebSocket 路径">
+                  <input
+                    className="field font-mono text-[11px]"
+                    value={form.ws?.path ?? ""}
+                    spellCheck={false}
+                    placeholder="/ws"
+                    onChange={(e) => update("ws", { ...(form.ws ?? {}), path: e.target.value })}
+                  />
+                </Field>
+              </div>
+              <div className="min-w-0 flex-1">
+                <Field label="WebSocket Host">
+                  <input
+                    className="field font-mono text-[11px]"
+                    value={form.ws?.host ?? ""}
+                    spellCheck={false}
+                    placeholder="cdn.example.com"
+                    onChange={(e) => update("ws", { ...(form.ws ?? {}), host: e.target.value })}
+                  />
+                </Field>
+              </div>
+            </div>
+          )}
+
+          <Field label="TLS / REALITY" hint="仅修改项会生效；publicKey 存在时按 REALITY 处理">
+            <select
+              className="field"
+              value={form.tls?.enabled ? (form.tls.realityPublicKey ? "reality" : "tls") : "none"}
+              onChange={(e) => {
+                const next = e.target.value as "none" | "tls" | "reality";
+                if (next === "none") {
+                  update("tls", null);
+                  return;
+                }
+                update("tls", {
+                  enabled: true,
+                  serverName: form.tls?.serverName ?? "",
+                  fingerprint: form.tls?.fingerprint ?? "chrome",
+                  alpn: form.tls?.alpn ?? null,
+                  realityPublicKey:
+                    next === "reality" ? form.tls?.realityPublicKey ?? "" : null,
+                  realityShortId: next === "reality" ? form.tls?.realityShortId ?? "" : null,
+                  realitySpiderX: next === "reality" ? form.tls?.realitySpiderX ?? "/" : null,
+                });
+              }}
+            >
+              <option value="none">无</option>
+              <option value="tls">TLS</option>
+              <option value="reality">REALITY</option>
+            </select>
+          </Field>
+
+          {form.tls?.enabled && (
+            <div className="flex flex-col gap-3">
+              <div className="flex gap-3">
+                <div className="min-w-0 flex-1">
+                  <Field label="ServerName (SNI)">
+                    <input
+                      className="field font-mono text-[11px]"
+                      value={form.tls.serverName ?? ""}
+                      spellCheck={false}
+                      placeholder="www.microsoft.com"
+                      onChange={(e) =>
+                        update("tls", { ...form.tls, serverName: e.target.value, enabled: true })
+                      }
+                    />
+                  </Field>
+                </div>
+                <div className="w-[120px] shrink-0">
+                  <Field label="Fingerprint">
+                    <input
+                      className="field font-mono text-[11px]"
+                      value={form.tls.fingerprint ?? ""}
+                      spellCheck={false}
+                      placeholder="chrome"
+                      onChange={(e) =>
+                        update("tls", { ...form.tls, fingerprint: e.target.value, enabled: true })
+                      }
+                    />
+                  </Field>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <Field label="ALPN" hint="逗号分隔，如 h2,http/1.1">
+                    <input
+                      className="field font-mono text-[11px]"
+                      value={(form.tls.alpn ?? []).join(",")}
+                      spellCheck={false}
+                      placeholder="h2,http/1.1"
+                      onChange={(e) => {
+                        const parts = e.target.value
+                          .split(",")
+                          .map((p) => p.trim())
+                          .filter((p) => p.length > 0);
+                        update("tls", { enabled: true, ...form.tls, alpn: parts });
+                      }}
+                    />
+                  </Field>
+                </div>
+              </div>
+              {form.tls.realityPublicKey !== null && (
+                <div className="flex flex-col gap-3">
+                  <Field label="PublicKey (pbk)">
+                    <input
+                      className="field font-mono text-[11px]"
+                      value={form.tls.realityPublicKey ?? ""}
+                      spellCheck={false}
+                      placeholder="REALITY 服务器公钥"
+                      onChange={(e) =>
+                        update("tls", {
+                          enabled: true,
+                          ...form.tls,
+                          realityPublicKey: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                  <div className="flex gap-3">
+                    <div className="min-w-0 flex-1">
+                      <Field label="ShortId (sid)">
+                        <input
+                          className="field font-mono text-[11px]"
+                          value={form.tls.realityShortId ?? ""}
+                          spellCheck={false}
+                          placeholder="abcd"
+                          onChange={(e) =>
+                            update("tls", {
+                              enabled: true,
+                              ...form.tls,
+                              realityShortId: e.target.value,
+                            })
+                          }
+                        />
+                      </Field>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <Field label="SpiderX (spx)">
+                        <input
+                          className="field font-mono text-[11px]"
+                          value={form.tls.realitySpiderX ?? ""}
+                          spellCheck={false}
+                          placeholder="/"
+                          onChange={(e) =>
+                            update("tls", {
+                              enabled: true,
+                              ...form.tls,
+                              realitySpiderX: e.target.value,
+                            })
+                          }
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {form.protocol === "vless" && (
+            <Field label="Flow (流控)" hint="如 xtls-rprx-vision；留空则走默认即时模式">
+              <input
+                className="field font-mono text-[11px]"
+                value={form.flow ?? ""}
+                spellCheck={false}
+                placeholder="xtls-rprx-vision"
+                onChange={(e) => update("flow", e.target.value || null)}
+              />
+            </Field>
+          )}
 
           <div className="flex items-center justify-between gap-3 rounded-xl border border-hairline bg-white/[0.03] px-3 py-2.5">
             <div className="min-w-0">
@@ -350,10 +566,10 @@ export default function NodeSheet({
             />
           </div>
 
-          {form.transport !== "tcp" && (
+          {form.transport !== "tcp" && form.transport !== "ws" && (
             <div className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-[11px] leading-5 text-warn">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-              当前版本只实现了 TCP 传输，保存为 {form.transport} 会被拒绝。
+              当前仅支持 tcp / ws 传输，保存为 {form.transport} 会被拒绝。
             </div>
           )}
         </div>

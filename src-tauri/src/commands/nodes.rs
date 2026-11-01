@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use crate::config::{parse_link, NodeEntry, Transport};
+use crate::config::{parse_link, NodeEntry, NodeTls, NodeWs, Protocol, Transport};
 use crate::error::AppError;
 use crate::state::{AppState, LatencyResult};
 use crate::vmess::{parse_uuid, CipherMethod, VmessConfig};
@@ -23,7 +23,15 @@ pub struct NodeInput {
     #[serde(default)]
     pub security: CipherMethod,
     #[serde(default)]
+    pub protocol: Protocol,
+    #[serde(default)]
     pub transport: Transport,
+    #[serde(default)]
+    pub tls: Option<NodeTls>,
+    #[serde(default)]
+    pub ws: Option<NodeWs>,
+    #[serde(default)]
+    pub flow: Option<String>,
     #[serde(default = "default_udp")]
     pub udp: bool,
 }
@@ -36,7 +44,7 @@ fn default_udp() -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct AddNodeResult {
     pub node: NodeEntry,
-    /// 导入时需要注意的限制（ws / tls 等尚未接入的传输）。
+    /// 导入时需要注意的限制（尚未接入的传输 / 缺失参数等）。
     pub warnings: Vec<String>,
 }
 
@@ -50,7 +58,7 @@ fn validate(input: &NodeInput) -> Result<(), AppError> {
     parse_uuid(&input.uuid).map_err(|e| AppError::invalid(e.to_string()))?;
     if !input.transport.supported() {
         return Err(AppError::Unsupported(format!(
-            "当前版本仅支持 tcp 传输，{} 暂不可用",
+            "当前仅支持 tcp / ws 传输，{} 暂不可用",
             input.transport.as_str()
         )));
     }
@@ -123,7 +131,11 @@ pub async fn save_node(
                 existing.config.uuid = input.uuid.trim().to_string();
                 existing.config.alter_id = input.alter_id;
                 existing.config.security = input.security;
+                existing.protocol = input.protocol;
                 existing.transport = input.transport;
+                existing.tls = input.tls;
+                existing.ws = input.ws;
+                existing.flow = input.flow;
                 existing.udp = input.udp;
                 existing.latency_ms = None;
                 saved = Some(existing.clone());
@@ -133,6 +145,7 @@ pub async fn save_node(
         let node = NodeEntry {
             id: uuid::Uuid::new_v4().to_string(),
             name,
+            protocol: input.protocol,
             transport: input.transport,
             config: VmessConfig {
                 host: input.host.trim().to_string(),
@@ -141,6 +154,9 @@ pub async fn save_node(
                 alter_id: input.alter_id,
                 security: input.security,
             },
+            tls: input.tls,
+            ws: input.ws,
+            flow: input.flow,
             udp: input.udp,
             latency_ms: None,
         };

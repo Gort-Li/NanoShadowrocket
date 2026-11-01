@@ -6,6 +6,7 @@ const NODES: Node[] = [
   {
     id: "demo-hk",
     name: "香港 · 01",
+    protocol: "vmess",
     transport: "tcp",
     host: "hk1.nano-edge.net",
     port: 443,
@@ -18,6 +19,7 @@ const NODES: Node[] = [
   {
     id: "demo-jp",
     name: "东京 · 02",
+    protocol: "vmess",
     transport: "tcp",
     host: "jp2.nano-edge.net",
     port: 8443,
@@ -30,6 +32,7 @@ const NODES: Node[] = [
   {
     id: "demo-sg",
     name: "新加坡 · 备用",
+    protocol: "vmess",
     transport: "tcp",
     host: "sg3.nano-edge.net",
     port: 443,

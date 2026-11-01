@@ -8,12 +8,12 @@ use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use serde_json::Value;
 
-use super::model::{NodeEntry, Transport};
+use super::model::{NodeEntry, NodeTls, NodeWs, Protocol, Transport};
 use crate::vmess::{parse_uuid, CipherMethod, VmessConfig};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LinkError {
-    #[error("链接必须以 vmess:// 开头")]
+    #[error("无法识别的协议链接，请输入 vmess:// 或 vless:// 开头的链接")]
     Scheme,
     #[error("链接内容不是合法的 Base64")]
     Base64,
@@ -133,17 +133,56 @@ fn parse_json_link(text: &str) -> Result<ParsedLink, LinkError> {
     let mut warnings = Vec::new();
     if !transport.supported() {
         warnings.push(format!(
-            "该节点使用 {} 传输，当前版本仅支持 tcp，保存后无法连接",
+            "该节点使用 {} 传输，当前仅支持 tcp / ws，保存后无法连接",
             transport.as_str()
         ));
     }
-    if !tls.is_empty() && !tls.eq_ignore_ascii_case("none") {
-        warnings.push("该节点启用了 TLS，当前版本尚未实现，连接会失败".into());
-    }
+    let pbk = json_str(&value, &["pbk", "publicKey"]);
+    let tls_on = !tls.is_empty()
+        && !tls.eq_ignore_ascii_case("none")
+        && !tls.eq_ignore_ascii_case("off")
+        && !tls.eq_ignore_ascii_case("false");
+    let reality = tls_on
+        && (tls.eq_ignore_ascii_case("reality")
+            || tls.eq_ignore_ascii_case("xtls")
+            || pbk.is_some());
+    let node_tls: Option<NodeTls> = if tls_on {
+        let node = NodeTls {
+            enabled: true,
+            server_name: json_str(&value, &["sni", "serverName"])
+                .or_else(|| Some(host.clone())),
+            fingerprint: json_str(&value, &["fp", "fingerprint"])
+                .or_else(|| Some("chrome".into())),
+            reality_public_key: if reality { pbk.clone() } else { None },
+            reality_short_id: if reality { json_str(&value, &["sid", "shortId"]) } else { None },
+            reality_spider_x: if reality { json_str(&value, &["spx", "spiderX"]) } else { None },
+            alpn: json_str(&value, &["alpn"]).map(|s| {
+                s.split(',')
+                    .map(|part| part.trim().to_string())
+                    .filter(|part| !part.is_empty())
+                    .collect()
+            }),
+        };
+        if reality && pbk.is_none() {
+            warnings.push("该节点启用了 REALITY 但缺少 pbk 公钥，连接可能失败".into());
+        }
+        Some(node)
+    } else {
+        None
+    };
+    let node_ws: Option<NodeWs> = if transport.as_str() == "ws" {
+        Some(NodeWs {
+            path: json_str(&value, &["path"]),
+            host: json_str(&value, &["host"]).or_else(|| Some(host.clone())),
+        })
+    } else {
+        None
+    };
     Ok(ParsedLink {
         node: NodeEntry {
             id: uuid::Uuid::new_v4().to_string(),
             name,
+            protocol: Protocol::Vmess,
             transport,
             config: VmessConfig {
                 host,
@@ -153,6 +192,9 @@ fn parse_json_link(text: &str) -> Result<ParsedLink, LinkError> {
                 security,
             },
             udp,
+            tls: node_tls,
+            ws: node_ws,
+            flow: None,
             latency_ms: None,
         },
         warnings,
@@ -217,6 +259,7 @@ fn parse_legacy_link(text: &str, query: Option<&str>) -> Result<ParsedLink, Link
         node: NodeEntry {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.unwrap_or_else(|| format!("{host}:{port}")),
+            protocol: Protocol::Vmess,
             transport,
             config: VmessConfig {
                 host: host.trim().to_string(),
@@ -226,13 +269,16 @@ fn parse_legacy_link(text: &str, query: Option<&str>) -> Result<ParsedLink, Link
                 security: parse_security(security_raw)?,
             },
             udp,
+            tls: None,
+            ws: None,
+            flow: None,
             latency_ms: None,
         },
         warnings,
     })
 }
 
-fn normalize_uuid(raw: &str) -> Result<String, LinkError> {
+pub(crate) fn normalize_uuid(raw: &str) -> Result<String, LinkError> {
     parse_uuid(raw).map_err(|e| LinkError::Invalid(e.to_string()))?;
     let cleaned: String = raw
         .trim()
@@ -304,12 +350,29 @@ mod tests {
     }
 
     #[test]
-    fn warns_about_ws_and_tls() {
-        let json = r#"{"ps":"ws","add":"a.com","port":8080,"id":"b831381d-6324-4d53-ad4f-8cda48b30811","net":"ws","tls":"tls"}"#;
+    fn parses_ws_and_tls_fields() {
+        let json = r#"{"ps":"ws","add":"a.com","port":8080,"id":"b831381d-6324-4d53-ad4f-8cda48b30811","net":"ws","tls":"tls","sni":"cdn.example.com","fp":"chrome","path":"/ws","host":"a.com"}"#;
         let parsed = parse_link(&format!("vmess://{}", b64(json))).unwrap();
         assert_eq!(parsed.node.transport, Transport::Ws);
-        assert_eq!(parsed.warnings.len(), 2);
-        assert!(parsed.node.outbound_config().is_err());
+        let ws = parsed.node.ws.as_ref().expect("ws 参数应被解析");
+        assert_eq!(ws.path.as_deref(), Some("/ws"));
+        assert_eq!(ws.host.as_deref(), Some("a.com"));
+        let tls = parsed.node.tls.as_ref().expect("tls 参数应被解析");
+        assert!(tls.enabled);
+        assert_eq!(tls.server_name.as_deref(), Some("cdn.example.com"));
+        assert_eq!(tls.fingerprint.as_deref(), Some("chrome"));
+        assert!(parsed.warnings.is_empty());
+        assert!(parsed.node.outbound_config().is_ok());
+    }
+
+    #[test]
+    fn parses_vmess_reality() {
+        let json = r#"{"ps":"r","add":"r.com","port":443,"id":"b831381d-6324-4d53-ad4f-8cda48b30811","net":"tcp","tls":"reality","sni":"www.a.com","pbk":"PBB","sid":"123456","spx":"/"}"#;
+        let parsed = parse_link(&format!("vmess://{}", b64(json))).unwrap();
+        let tls = parsed.node.tls.as_ref().expect("reality 应被解析");
+        assert!(tls.reality());
+        assert_eq!(tls.reality_public_key.as_deref(), Some("PBB"));
+        assert_eq!(tls.reality_short_id.as_deref(), Some("123456"));
     }
 
     #[test]

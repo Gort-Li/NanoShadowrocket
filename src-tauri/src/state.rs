@@ -12,7 +12,7 @@ use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::config::{rules_dir, AppConfig, ConfigStore, RemoteRuleConfig};
+use crate::config::{rules_dir, AppConfig, ConfigStore, Protocol, RemoteRuleConfig};
 use crate::error::AppError;
 use crate::proxy::{
     dns::{DnsResolver, DnsSetting},
@@ -245,26 +245,33 @@ impl AppState {
 
         let cfg = self.config.snapshot();
         let node = cfg.selected().cloned().ok_or(AppError::NoNode)?;
-        let outbound_config = node.outbound_config().map_err(AppError::Unsupported)?;
 
-        #[cfg(test)]
-        let use_native = self.native_outbound;
-        #[cfg(not(test))]
-        let use_native = false;
+        let native_desired: bool = {
+            #[cfg(test)]
+            {
+                self.native_outbound
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        };
+        // 内置引擎仅能跑 vmess；其余协议一律交给 v2ray-core sidecar。
+        let use_native = native_desired && node.protocol == Protocol::Vmess;
 
         let (proxy, proxy_udp, sidecar): (
             Arc<dyn Outbound>,
             Arc<dyn UdpOutbound>,
             Option<V2raySidecar>,
         ) = if use_native {
+            let outbound_config = node.outbound_config().map_err(AppError::Unsupported)?;
             (
                 Arc::new(crate::proxy::outbound::VmessOutbound::new(outbound_config)),
                 Arc::new(RejectUdpOutbound),
                 None,
             )
         } else {
-            let sidecar =
-                V2raySidecar::start(&outbound_config, node.transport, &self.config_dir).await?;
+            let sidecar = V2raySidecar::start(&node, &self.config_dir).await?;
             let socks = sidecar.socks_addr();
             (
                 Arc::new(SidecarOutbound::new(socks)),

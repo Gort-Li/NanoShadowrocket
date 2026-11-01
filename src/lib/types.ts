@@ -1,8 +1,30 @@
 export type Policy = "proxy" | "direct" | "reject";
 
+export type Protocol = "vmess" | "vless";
+
 export type Transport = "tcp" | "ws" | "grpc" | "h2" | "quic" | "kcp" | "http";
 
 export type Security = "aes-128-gcm" | "chacha20-poly1305" | "legacy";
+
+/**
+ * TLS / REALITY 流加密参数（协议无关，vmess/vless 共用）。
+ * realityPublicKey 存在且 enabled 时按 REALITY 处理，否则按普通 TLS。
+ */
+export interface NodeTls {
+  enabled: boolean;
+  serverName?: string | null;
+  fingerprint?: string | null;
+  realityPublicKey?: string | null;
+  realityShortId?: string | null;
+  realitySpiderX?: string | null;
+  alpn?: string[] | null;
+}
+
+/** WebSocket 传输参数（仅 transport=ws 时生效）。 */
+export interface NodeWs {
+  path?: string | null;
+  host?: string | null;
+}
 
 export type RemoteStatus = "idle" | "ok" | "error";
 
@@ -25,12 +47,16 @@ export interface ProxySnapshot {
 export interface Node {
   id: string;
   name: string;
+  protocol: Protocol;
   transport: Transport;
   host: string;
   port: number;
   uuid: string;
   alterId: number;
   security: Security;
+  tls?: NodeTls | null;
+  ws?: NodeWs | null;
+  flow?: string | null;
   udp: boolean;
   latencyMs: number | null;
 }
@@ -165,7 +191,11 @@ export interface NodeInput {
   uuid: string;
   alterId: number;
   security: Security;
+  protocol: Protocol;
   transport: Transport;
+  tls?: NodeTls | null;
+  ws?: NodeWs | null;
+  flow?: string | null;
   udp: boolean;
 }
 

@@ -50,16 +50,83 @@ impl Transport {
 
     /// 当前引擎是否可以直接使用。
     pub fn supported(&self) -> bool {
-        matches!(self, Transport::Tcp)
+        matches!(self, Transport::Tcp | Transport::Ws)
     }
 }
 
-/// 一个已保存的 VMess 节点。
+/// 出站协议。运行时转发一律交由 v2ray-core sidecar 负责，本枚举只用于
+/// 上层建模与侧车配置生成，因此新增协议只需扩展枚举与解析器。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    #[default]
+    Vmess,
+    Vless,
+}
+
+impl Protocol {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "vless" => Protocol::Vless,
+            _ => Protocol::Vmess,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Protocol::Vmess => "vmess",
+            Protocol::Vless => "vless",
+        }
+    }
+}
+
+/// TLS / REALITY 流加密参数。协议无关，vmess / vless 及后续协议共用。
+/// `reality_public_key` 存在且 `enabled` 时按 REALITY 生成，否则按普通 TLS。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeTls {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub server_name: Option<String>,
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+    #[serde(default)]
+    pub reality_public_key: Option<String>,
+    #[serde(default)]
+    pub reality_short_id: Option<String>,
+    #[serde(default)]
+    pub reality_spider_x: Option<String>,
+    /// ALPN 协商列表（h2 / http/1.1 等），可选。
+    #[serde(default)]
+    pub alpn: Option<Vec<String>>,
+}
+
+impl NodeTls {
+    /// REALITY 分支由 `enabled` 加 `reality_public_key` 共同决定，缺一不算。
+    pub fn reality(&self) -> bool {
+        self.enabled && self.reality_public_key.is_some()
+    }
+}
+
+/// WebSocket 传输参数（仅 transport = ws 时使用），协议无关。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeWs {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
+}
+
+/// 一个已保存的节点（VMess / VLESS 等）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeEntry {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub protocol: Protocol,
     #[serde(default)]
     pub transport: Transport,
     #[serde(flatten)]
@@ -67,6 +134,15 @@ pub struct NodeEntry {
     /// 是否允许 SOCKS5 UDP 转发。旧链接的 `udp=1` 会置为 true。
     #[serde(default = "default_true")]
     pub udp: bool,
+    /// TLS / REALITY 流加密参数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<NodeTls>,
+    /// WebSocket 传输参数（transport = ws 时生效）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ws: Option<NodeWs>,
+    /// 出站流控（VLESS：`xtls-rprx-vision` 等）。vmess 下通常为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<String>,
     /// 最近一次延迟测试结果（毫秒），`None` 表示未测。
     #[serde(default)]
     pub latency_ms: Option<u32>,
@@ -77,9 +153,13 @@ impl NodeEntry {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
+            protocol: Protocol::Vmess,
             transport: Transport::Tcp,
             config,
             udp: true,
+            tls: None,
+            ws: None,
+            flow: None,
             latency_ms: None,
         }
     }
@@ -88,7 +168,7 @@ impl NodeEntry {
     pub fn outbound_config(&self) -> Result<VmessConfig, String> {
         if !self.transport.supported() {
             return Err(format!(
-                "节点「{}」使用 {} 传输，当前版本仅支持 tcp",
+                "节点「{}」使用 {} 传输，暂不支持",
                 self.name,
                 self.transport.as_str()
             ));
@@ -398,7 +478,7 @@ mod tests {
     #[test]
     fn unsupported_transport_is_rejected() {
         let mut node = NodeEntry::new(
-            "ws 节点",
+            "grpc 节点",
             VmessConfig {
                 host: "a.com".into(),
                 port: 80,
@@ -407,7 +487,7 @@ mod tests {
                 security: default_security(),
             },
         );
-        node.transport = Transport::Ws;
+        node.transport = Transport::Grpc;
         assert!(node.outbound_config().is_err());
     }
 
