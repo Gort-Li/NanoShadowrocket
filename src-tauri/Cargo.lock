@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "nano-shadowrocket"
-version = "1.2.5"
+version = "1.2.6"
 dependencies = [
  "aes",
  "aes-gcm",
